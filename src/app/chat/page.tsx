@@ -1,5 +1,11 @@
 'use client'
 
+'use client'
+
+'use client'
+
+import { Suspense } from 'react'
+import { Suspense } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
@@ -7,7 +13,7 @@ import { Topbar } from '@/components/Topbar'
 import type { Lead, Mensagem } from '@/lib/types'
 import { Bot, Send, Loader2, User } from 'lucide-react'
 
-export default function ChatPage() {
+function ChatPageInner() {
   const supabase = createClient()
   const searchParams = useSearchParams()
   const [leads, setLeads] = useState<Lead[]>([])
@@ -181,5 +187,13 @@ export default function ChatPage() {
         </main>
       </div>
     </div>
+  )
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-screen">Carregando...</div>}>
+      <ChatPageInner />
+    </Suspense>
   )
 }
