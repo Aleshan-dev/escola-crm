@@ -1,11 +1,9 @@
 'use client'
 
-'use client'
-
-'use client'
-
 import { Suspense } from 'react'
-import { Suspense } from 'react'
+
+
+
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
