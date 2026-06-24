@@ -1,30 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { cleanWhatsappJid, evolutionSendText } from '@/lib/evolution'
-import { gerarRespostaSara } from '@/lib/sara'
+import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 
-// GET para verificar que o webhook está vivo
 export async function GET() {
   return NextResponse.json({ ok: true, msg: 'Webhook escola-crm online' })
 }
 
-// POST recebe eventos da Evolution
 export async function POST(req: NextRequest) {
   const supabase = createServerAdminClient()
 
   try {
     const body = await req.json()
-
-    // Estrutura do evento Evolution: { event, instance, data }
     const event = body.event
     const data = body.data
 
-    // Só processamos mensagens recebidas
     if (event !== 'messages.upsert' && event !== 'MESSAGES_UPSERT') {
       return NextResponse.json({ ignored: event })
     }
 
-    // Ignora mensagens enviadas pela própria escola (fromMe)
     if (data?.key?.fromMe === true) return NextResponse.json({ ignored: 'fromMe' })
 
     const jid: string = data?.key?.remoteJid || ''
@@ -57,10 +51,10 @@ export async function POST(req: NextRequest) {
     }
     if (!familia) throw new Error('Falha ao criar família')
 
-    // 2. Garante lead na primeira coluna ('Capturados')
+    // 2. Garante lead
     let { data: lead } = await supabase
       .from('leads')
-      .select('id, ia_ativa, coluna_id')
+      .select('id, ia_ativa, coluna_id, sara_pode_mover')
       .eq('familia_id', familia.id)
       .order('criado_em', { ascending: false })
       .limit(1)
@@ -82,7 +76,7 @@ export async function POST(req: NextRequest) {
           ia_ativa: primeiraColuna!.ia_ativa_default,
           tags: ['whatsapp'],
         })
-        .select('id, ia_ativa, coluna_id')
+        .select('id, ia_ativa, coluna_id, sara_pode_mover')
         .single()
       lead = ins.data
     }
@@ -96,21 +90,89 @@ export async function POST(req: NextRequest) {
       whatsapp_message_id: wid,
     })
 
-    // 4. Se IA ativa, gera resposta e envia
+    // Atualiza ultima_interacao_em
+    await supabase
+      .from('leads')
+      .update({ ultima_interacao_em: new Date().toISOString() })
+      .eq('id', lead.id)
+
+    // 4. Sara IA
     if (lead.ia_ativa) {
       try {
-        const resposta = await gerarRespostaSara(lead.id)
-        const sent = await evolutionSendText(telefone, resposta)
+        const { data: todasColunas } = await supabase
+          .from('colunas')
+          .select('id, nome, ordem')
+          .order('ordem')
+
+        const colunaAtual = todasColunas?.find((c) => c.id === lead.coluna_id) as
+          | SaraColuna
+          | undefined
+
+        const saraResult = await gerarRespostaSara(
+          lead.id,
+          todasColunas as SaraColuna[] | undefined,
+          colunaAtual
+        )
+
+        const sent = await evolutionSendText(telefone, saraResult.resposta)
 
         await supabase.from('mensagens').insert({
           lead_id: lead.id,
           direcao: 'out_ia',
-          conteudo: resposta,
+          conteudo: saraResult.resposta,
           whatsapp_message_id: sent?.key?.id || null,
         })
+
+        // 5. Guard-rails de movimentação
+        if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && todasColunas && colunaAtual) {
+          const proximaColuna = todasColunas.find((c) => c.id === saraResult.proxima_coluna_id)
+
+          let motivoRecusa: string | null = null
+
+          if (!proximaColuna) {
+            motivoRecusa = 'coluna_inexistente'
+          } else if (proximaColuna.ordem > colunaAtual.ordem + 1) {
+            motivoRecusa = `pulou_etapas: tentou ir para ordem ${proximaColuna.ordem} da ordem ${colunaAtual.ordem}`
+          } else if (proximaColuna.ordem <= colunaAtual.ordem) {
+            motivoRecusa = `regressao: ordem ${proximaColuna.ordem} <= atual ${colunaAtual.ordem}`
+          } else if (proximaColuna.nome === 'Matriculados') {
+            motivoRecusa = 'matriculados_requer_confirmacao_humana'
+          } else if (proximaColuna.nome === 'Perdidos' && !saraResult.razao_movimentacao) {
+            motivoRecusa = 'perdidos_sem_razao'
+          }
+
+          if (motivoRecusa) {
+            await supabase.from('acoes_sara').insert({
+              lead_id: lead.id,
+              tipo: 'movimentacao',
+              conteudo: `Tentativa de mover para "${proximaColuna?.nome}" recusada`,
+              razao: motivoRecusa,
+              sucesso: false,
+              coluna_origem_id: colunaAtual.id,
+              coluna_destino_id: saraResult.proxima_coluna_id,
+            })
+          } else {
+            await supabase
+              .from('leads')
+              .update({
+                coluna_id: saraResult.proxima_coluna_id,
+                entrou_coluna_em: new Date().toISOString(),
+              })
+              .eq('id', lead.id)
+
+            await supabase.from('acoes_sara').insert({
+              lead_id: lead.id,
+              tipo: 'movimentacao',
+              conteudo: saraResult.razao_movimentacao || `Movido para ${proximaColuna!.nome}`,
+              razao: saraResult.razao_movimentacao,
+              sucesso: true,
+              coluna_origem_id: colunaAtual.id,
+              coluna_destino_id: saraResult.proxima_coluna_id,
+            })
+          }
+        }
       } catch (e) {
         console.error('Sara IA falhou:', e)
-        // Não derruba o webhook por causa da IA
       }
     }
 
