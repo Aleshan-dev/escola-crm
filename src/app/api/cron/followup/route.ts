@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
     motivo?: string
   }[] = []
 
-  for (const lead of (leads || []) as LeadFollowup[]) {
+  for (const lead of (leads || []) as unknown as LeadFollowup[]) {
     if (!lead.familia?.telefone) continue
 
     const colunaNome = lead.coluna?.nome || ''

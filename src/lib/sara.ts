@@ -23,7 +23,7 @@ export async function gerarRespostaSara(
 ): Promise<SaraResposta> {
   const supabase = createServerAdminClient()
 
-  const { data: lead } = await supabase
+  const { data: lead }: { data: any } = await supabase
     .from('leads')
     .select('*, familia:familias(*), crianca:criancas(*)')
     .eq('id', leadId)
