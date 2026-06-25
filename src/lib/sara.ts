@@ -1,7 +1,11 @@
 import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+let _openai: OpenAI | null = null
+function getOpenAI(): OpenAI {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  return _openai
+}
 
 export type SaraColuna = {
   id: string
@@ -109,7 +113,7 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
 
   const modelo = config?.modelo?.startsWith('gpt') ? config.modelo : 'gpt-4o'
 
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: modelo,
     max_tokens: 600,
     response_format: { type: 'json_object' },
