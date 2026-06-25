@@ -1,0 +1,24 @@
+name: Sara Follow-up Cron
+
+on:
+  schedule:
+      - cron: '0 * * * *'
+        workflow_dispatch:
+
+        jobs:
+          followup:
+              runs-on: ubuntu-latest
+                  steps:
+                        - name: Chamar endpoint de follow-up
+                                run: |
+                                          RESPONSE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+                                                      -X GET \
+                                                                  -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+                                                                              https://escola-crm.vercel.app/api/cron/followup)
+                                                                                        echo "HTTP Status: $RESPONSE"
+                                                                                                  echo "Response body:"
+                                                                                                            cat /tmp/response.txt
+                                                                                                                      if [ "$RESPONSE" != "200" ]; then
+                                                                                                                                  echo "ERRO: endpoint retornou $RESPONSE"
+                                                                                                                                              exit 1
+                                                                                                                                                        fi
