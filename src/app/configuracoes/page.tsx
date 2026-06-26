@@ -43,6 +43,12 @@ const secoes: { nome: string; itens: Item[] }[] = [
       { titulo: 'Automações', descricao: 'Fluxos automáticos de conversa.', icon: Workflow },
     ],
   },
+  {
+    nome: 'Integrações',
+    itens: [
+      { titulo: 'Google Agenda', descricao: 'Sincronize visitas com o Google Calendar.', href: '/configuracoes/integracoes', icon: CalendarCheck },
+    ],
+  },
 ]
 
 export default function ConfiguracoesPage() {
