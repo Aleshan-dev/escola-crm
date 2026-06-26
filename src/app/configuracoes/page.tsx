@@ -21,9 +21,9 @@ const secoes: { nome: string; itens: Item[] }[] = [
   {
     nome: 'Escola',
     itens: [
-      { titulo: 'Séries da escola', descricao: 'Cadastre as séries ofertadas.', icon: GraduationCap },
-      { titulo: 'Turnos disponíveis', descricao: 'Defina os turnos de funcionamento.', icon: Clock },
-      { titulo: 'Metas de crescimento', descricao: 'Metas de captação por etapa.', icon: Target },
+      { titulo: 'Séries da escola', descricao: 'Cadastre as séries ofertadas.', href: '/configuracoes/series', icon: GraduationCap },
+      { titulo: 'Turnos disponíveis', descricao: 'Defina os turnos de funcionamento.', href: '/configuracoes/turnos', icon: Clock },
+      { titulo: 'Metas de crescimento', descricao: 'Metas de captação por etapa.', href: '/configuracoes/metas', icon: Target },
     ],
   },
   {
