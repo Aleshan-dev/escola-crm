@@ -17,6 +17,7 @@ export type SaraResposta = {
   resposta: string
   proxima_coluna_id: string | null
   razao_movimentacao: string | null
+  resumo_anotacao: string | null
 }
 
 export async function gerarRespostaSara(
@@ -100,7 +101,8 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
 {
   "resposta": "texto da mensagem para a família",
   "proxima_coluna_id": "uuid da próxima coluna OU null",
-  "razao_movimentacao": "explicação breve OU null"
+  "razao_movimentacao": "explicação breve OU null",
+  "resumo_anotacao": "1-2 frases resumindo o que ha de novo na conversa (dados coletados, visita agendada, objecao, decisao) OU null se nao houver fato novo relevante"
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -128,12 +130,14 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
       resposta: parsed.resposta || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: parsed.proxima_coluna_id ?? null,
       razao_movimentacao: parsed.razao_movimentacao ?? null,
+      resumo_anotacao: parsed.resumo_anotacao ?? null,
     }
   } catch {
     return {
       resposta: raw || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: null,
       razao_movimentacao: null,
+      resumo_anotacao: null,
     }
   }
 }

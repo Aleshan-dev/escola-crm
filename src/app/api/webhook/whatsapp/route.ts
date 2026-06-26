@@ -133,6 +133,14 @@ export async function POST(req: NextRequest) {
           })
         }
 
+        // Anotacao automatica: registra um resumo da conversa quando ha fato novo
+        if (saraResult.resumo_anotacao && saraResult.resumo_anotacao.trim()) {
+          await supabase.from('anotacoes').insert({
+            lead_id: lead.id,
+            conteudo: saraResult.resumo_anotacao.trim(),
+          })
+        }
+
         // 5. Guard-rails de movimentação
         if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && todasColunas && colunaAtual) {
           const proximaColuna = todasColunas.find((c) => c.id === saraResult.proxima_coluna_id)

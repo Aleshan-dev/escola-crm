@@ -1,7 +1,9 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import type { Coluna, Lead } from '@/lib/types'
-import { X, Bot, MessageSquare, Phone, Mail, Baby, Thermometer, Calendar } from 'lucide-react'
+import { createClient } from '@/lib/supabase-browser'
+import { X, Bot, MessageSquare, Phone, Mail, Baby, Thermometer, Calendar, FileText } from 'lucide-react'
 import Link from 'next/link'
 
 function diasNaEtapa(entrou: string): number {
@@ -20,6 +22,8 @@ const TEMP_CLASS: Record<Lead['temperatura'], string> = {
   quente: 'bg-red-100 text-red-700',
 }
 
+type Anotacao = { id: string; conteudo: string; criado_em: string }
+
 export function LeadDetailModal({
   lead,
   coluna,
@@ -29,7 +33,25 @@ export function LeadDetailModal({
   coluna?: Coluna
   onClose: () => void
 }) {
+  const supabase = createClient()
   const dias = diasNaEtapa(lead.entrou_coluna_em)
+  const [anotacoes, setAnotacoes] = useState<Anotacao[]>([])
+
+  useEffect(() => {
+    let ativo = true
+    supabase
+      .from('anotacoes')
+      .select('id, conteudo, criado_em')
+      .eq('lead_id', lead.id)
+      .order('criado_em', { ascending: false })
+      .then(({ data }) => {
+        if (ativo && data) setAnotacoes(data as unknown as Anotacao[])
+      })
+    return () => {
+      ativo = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead.id])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
@@ -121,6 +143,27 @@ export function LeadDetailModal({
               <span className="text-slate-700">{lead.proxima_acao}</span>
             </div>
           )}
+
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+              <FileText className="w-4 h-4 text-slate-400" />
+              Anotações da Sara
+            </div>
+            {anotacoes.length === 0 ? (
+              <p className="text-xs text-slate-400">Nenhuma anotação ainda.</p>
+            ) : (
+              <div className="space-y-2">
+                {anotacoes.map((a) => (
+                  <div key={a.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
+                    <p className="text-sm text-slate-700">{a.conteudo}</p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {new Date(a.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="border-t border-slate-100 p-4">
