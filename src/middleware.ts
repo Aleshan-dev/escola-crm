@@ -27,7 +27,7 @@ export async function middleware(request: NextRequest) {
 
   const url = request.nextUrl
   const isAuthRoute = url.pathname.startsWith('/login')
-  const isApiWebhook = url.pathname.startsWith('/api/webhook')
+  const isApiWebhook = url.pathname.startsWith('/api/webhook') || url.pathname.startsWith('/api/cron')
 
   // Webhooks do WhatsApp não precisam de auth
   if (isApiWebhook) return supabaseResponse
