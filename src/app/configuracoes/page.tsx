@@ -30,9 +30,9 @@ const secoes: { nome: string; itens: Item[] }[] = [
     nome: 'Captação',
     itens: [
       { titulo: 'Funis de captação', descricao: 'Crie e edite os funis e etapas.', icon: Filter },
-      { titulo: 'Horários de visita', descricao: 'Horários disponíveis para visitas.', icon: CalendarCheck },
-      { titulo: 'Motivos de perda', descricao: 'Padronize os motivos de perda.', icon: XCircle },
-      { titulo: 'Origem dos interessados', descricao: 'Canais de entrada de leads.', icon: Globe },
+      { titulo: 'Horários de visita', descricao: 'Horários disponíveis para visitas.', href: '/configuracoes/horarios-visita', icon: CalendarCheck },
+      { titulo: 'Motivos de perda', descricao: 'Padronize os motivos de perda.', href: '/configuracoes/motivos', icon: XCircle },
+      { titulo: 'Origem dos interessados', descricao: 'Canais de entrada de leads.', href: '/configuracoes/origens', icon: Globe },
     ],
   },
   {
