@@ -18,6 +18,7 @@ export type SaraResposta = {
   proxima_coluna_id: string | null
   razao_movimentacao: string | null
   resumo_anotacao: string | null
+  agendar_visita_em: string | null
 }
 
 export async function gerarRespostaSara(
@@ -102,11 +103,16 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
   "resposta": "texto da mensagem para a família",
   "proxima_coluna_id": "uuid da próxima coluna OU null",
   "razao_movimentacao": "explicação breve OU null",
-  "resumo_anotacao": "1-2 frases resumindo o que ha de novo na conversa (dados coletados, visita agendada, objecao, decisao) OU null se nao houver fato novo relevante"
+  "resumo_anotacao": "1-2 frases resumindo o que ha de novo na conversa (dados coletados, visita agendada, objecao, decisao) OU null se nao houver fato novo relevante",
+  "agendar_visita_em": "data e hora ISO 8601 da visita com fuso -05:00 (ex: 2026-06-30T10:00:00-05:00), SOMENTE quando a familia confirmar dia E horario; senao null"
 }`
+
+  const agoraFmt = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Rio_Branco' }).format(new Date())
+  const contextoAgendamento = `Data e hora atuais (fuso da escola, America/Rio_Branco): ${agoraFmt}. Use para interpretar datas relativas como amanha ou sexta. Quando a familia confirmar um dia E horario para a visita, preencha agendar_visita_em em ISO 8601 com fuso -05:00. So agende quando houver confirmacao concreta de dia e hora.`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
     { role: 'system', content: systemPrompt },
+    { role: 'system', content: contextoAgendamento },
     ...historico.map((m) => ({
       role: (m.direcao === 'in' ? 'user' : 'assistant') as 'user' | 'assistant',
       content: m.conteudo,
@@ -131,6 +137,7 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
       proxima_coluna_id: parsed.proxima_coluna_id ?? null,
       razao_movimentacao: parsed.razao_movimentacao ?? null,
       resumo_anotacao: parsed.resumo_anotacao ?? null,
+      agendar_visita_em: parsed.agendar_visita_em ?? null,
     }
   } catch {
     return {
@@ -138,6 +145,7 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
       proxima_coluna_id: null,
       razao_movimentacao: null,
       resumo_anotacao: null,
+      agendar_visita_em: null,
     }
   }
 }

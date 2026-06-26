@@ -141,6 +141,19 @@ export async function POST(req: NextRequest) {
           })
         }
 
+        // Agendamento automatico: cria a visita quando a Sara confirma data e hora
+        if (saraResult.agendar_visita_em) {
+          const dataVisita = new Date(saraResult.agendar_visita_em)
+          if (!isNaN(dataVisita.getTime())) {
+            await supabase.from('tarefas').insert({
+              lead_id: lead.id,
+              titulo: `Visita — ${familia.nome_responsavel}`,
+              tipo: 'visita',
+              data_hora: dataVisita.toISOString(),
+            })
+          }
+        }
+
         // 5. Guard-rails de movimentação
         if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && todasColunas && colunaAtual) {
           const proximaColuna = todasColunas.find((c) => c.id === saraResult.proxima_coluna_id)
