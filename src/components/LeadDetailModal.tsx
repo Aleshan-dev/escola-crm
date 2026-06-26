@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { Coluna, Lead } from '@/lib/types'
 import { createClient } from '@/lib/supabase-browser'
-import { X, Bot, MessageSquare, Phone, Mail, Baby, Thermometer, Calendar, FileText } from 'lucide-react'
+import { X, Bot, MessageSquare, Phone, Mail, Baby, FileText, CheckSquare, Square, Trash2, Plus } from 'lucide-react'
 import Link from 'next/link'
 
 function diasNaEtapa(entrou: string): number {
@@ -11,144 +11,194 @@ function diasNaEtapa(entrou: string): number {
   return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)))
 }
 
-const TEMP_LABEL: Record<Lead['temperatura'], string> = {
-  frio: 'Frio',
-  morno: 'Morno',
-  quente: 'Quente',
-}
-const TEMP_CLASS: Record<Lead['temperatura'], string> = {
-  frio: 'bg-slate-100 text-slate-600',
-  morno: 'bg-amber-100 text-amber-700',
-  quente: 'bg-red-100 text-red-700',
-}
-
+type Serie = { id: string; nome: string }
+type Tarefa = { id: string; titulo: string; tipo: string | null; data_hora: string; concluida: boolean }
 type Anotacao = { id: string; conteudo: string; criado_em: string }
+
+const PERIODOS = ['matutino', 'vespertino', 'integral']
+const TIPOS = ['geral', 'visita', 'ligacao', 'followup', 'reuniao']
+const selCls = 'rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-blue-400 bg-white'
+const inputCls = 'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400'
 
 export function LeadDetailModal({
   lead,
-  coluna,
+  colunas,
   onClose,
 }: {
   lead: Lead
-  coluna?: Coluna
+  colunas: Coluna[]
   onClose: () => void
 }) {
   const supabase = createClient()
   const dias = diasNaEtapa(lead.entrou_coluna_em)
+
+  const [colunaId, setColunaId] = useState(lead.coluna_id)
+  const [temperatura, setTemperatura] = useState<string>(lead.temperatura)
+  const [serie, setSerie] = useState(lead.crianca?.serie_desejada || '')
+  const [periodo, setPeriodo] = useState(lead.crianca?.periodo || '')
+
+  const [seriesList, setSeriesList] = useState<Serie[]>([])
+  const [tarefas, setTarefas] = useState<Tarefa[]>([])
   const [anotacoes, setAnotacoes] = useState<Anotacao[]>([])
+
+  const [tTitulo, setTTitulo] = useState('')
+  const [tTipo, setTTipo] = useState('visita')
+  const [tData, setTData] = useState('')
+  const [tErro, setTErro] = useState<string | null>(null)
+
+  async function carregarTarefas() {
+    const { data } = await supabase
+      .from('tarefas')
+      .select('id, titulo, tipo, data_hora, concluida')
+      .eq('lead_id', lead.id)
+      .order('data_hora')
+    setTarefas((data as unknown as Tarefa[]) || [])
+  }
 
   useEffect(() => {
     let ativo = true
-    supabase
-      .from('anotacoes')
-      .select('id, conteudo, criado_em')
-      .eq('lead_id', lead.id)
-      .order('criado_em', { ascending: false })
-      .then(({ data }) => {
-        if (ativo && data) setAnotacoes(data as unknown as Anotacao[])
-      })
-    return () => {
-      ativo = false
-    }
+    supabase.from('series').select('id, nome').eq('ativa', true).order('ordem').then(({ data }) => {
+      if (ativo && data) setSeriesList(data as unknown as Serie[])
+    })
+    supabase.from('anotacoes').select('id, conteudo, criado_em').eq('lead_id', lead.id).order('criado_em', { ascending: false }).then(({ data }) => {
+      if (ativo && data) setAnotacoes(data as unknown as Anotacao[])
+    })
+    carregarTarefas()
+    return () => { ativo = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id])
 
+  async function mudarColuna(id: string) {
+    setColunaId(id)
+    await supabase.from('leads').update({ coluna_id: id, entrou_coluna_em: new Date().toISOString() }).eq('id', lead.id)
+  }
+  async function mudarTemperatura(t: string) {
+    setTemperatura(t)
+    await supabase.from('leads').update({ temperatura: t }).eq('id', lead.id)
+  }
+  async function mudarSerie(s: string) {
+    setSerie(s)
+    if (lead.crianca_id) await supabase.from('criancas').update({ serie_desejada: s || null }).eq('id', lead.crianca_id)
+  }
+  async function mudarPeriodo(p: string) {
+    setPeriodo(p)
+    if (lead.crianca_id) await supabase.from('criancas').update({ periodo: p || null }).eq('id', lead.crianca_id)
+  }
+
+  async function addTarefa() {
+    setTErro(null)
+    if (!tTitulo.trim()) { setTErro('Informe o título.'); return }
+    if (!tData) { setTErro('Informe a data e hora.'); return }
+    const { error } = await supabase.from('tarefas').insert({
+      lead_id: lead.id,
+      titulo: tTitulo.trim(),
+      tipo: tTipo,
+      data_hora: new Date(tData).toISOString(),
+    })
+    if (error) { setTErro(error.message); return }
+    setTTitulo(''); setTData(''); carregarTarefas()
+  }
+  async function toggleTarefa(t: Tarefa) {
+    await supabase.from('tarefas').update({ concluida: !t.concluida }).eq('id', t.id)
+    carregarTarefas()
+  }
+  async function removerTarefa(id: string) {
+    await supabase.from('tarefas').delete().eq('id', id)
+    carregarTarefas()
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-5">
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold truncate">
-              {lead.familia?.nome_responsavel || 'Sem nome'}
-            </h2>
-            {coluna && (
-              <span className="text-xs font-medium" style={{ color: coluna.cor }}>
-                {coluna.nome}
-              </span>
-            )}
+            <h2 className="text-lg font-semibold truncate">{lead.familia?.nome_responsavel || 'Sem nome'}</h2>
+            {lead.crianca && <span className="text-xs text-slate-500">{lead.crianca.nome}</span>}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700" aria-label="Fechar">
-            <X className="w-5 h-5" />
-          </button>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700" aria-label="Fechar"><X className="w-5 h-5" /></button>
         </div>
 
-        <div className="space-y-4 p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${TEMP_CLASS[lead.temperatura]}`}>
-              <Thermometer className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />
-              {TEMP_LABEL[lead.temperatura]}
-            </span>
-            <span className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">
-              Score {lead.score}
-            </span>
-            <span
-              className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                dias >= 7 ? 'bg-red-100 text-red-700' : dias >= 3 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              <Calendar className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />
-              {dias === 0 ? 'Entrou hoje' : `${dias}d na etapa`}
-            </span>
-            {lead.ia_ativa && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-green-100 text-green-700 font-medium">
-                <Bot className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />
-                Sara ativa
-              </span>
+        <div className="space-y-5 p-5">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Etapa</span>
+              <select value={colunaId} onChange={(e) => mudarColuna(e.target.value)} className={`${selCls} w-full`}>
+                {colunas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Temperatura</span>
+              <select value={temperatura} onChange={(e) => mudarTemperatura(e.target.value)} className={`${selCls} w-full`}>
+                <option value="frio">Frio</option>
+                <option value="morno">Morno</option>
+                <option value="quente">Quente</option>
+              </select>
+            </label>
+            {lead.crianca && (
+              <>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-slate-500">Série</span>
+                  <select value={serie} onChange={(e) => mudarSerie(e.target.value)} className={`${selCls} w-full`}>
+                    <option value="">—</option>
+                    {seriesList.map((s) => <option key={s.id} value={s.nome}>{s.nome}</option>)}
+                    {serie && !seriesList.some((s) => s.nome === serie) && <option value={serie}>{serie}</option>}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-slate-500">Período</span>
+                  <select value={periodo} onChange={(e) => mudarPeriodo(e.target.value)} className={`${selCls} w-full`}>
+                    <option value="">—</option>
+                    {PERIODOS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </label>
+              </>
             )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">Score {lead.score}</span>
+            <span className={`px-2.5 py-1 rounded-full font-medium ${dias >= 7 ? 'bg-red-100 text-red-700' : dias >= 3 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{dias === 0 ? 'Entrou hoje' : `${dias}d na etapa`}</span>
+            {lead.ia_ativa && <span className="px-2.5 py-1 rounded-full bg-green-100 text-green-700 font-medium"><Bot className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />Sara ativa</span>}
           </div>
 
           <div className="space-y-2 text-sm">
-            <div className="flex items-center gap-2 text-slate-700">
-              <Phone className="w-4 h-4 text-slate-400" />
-              {lead.familia?.telefone || '—'}
-            </div>
-            {lead.familia?.email && (
-              <div className="flex items-center gap-2 text-slate-700">
-                <Mail className="w-4 h-4 text-slate-400" />
-                {lead.familia.email}
-              </div>
-            )}
+            <div className="flex items-center gap-2 text-slate-700"><Phone className="w-4 h-4 text-slate-400" />{lead.familia?.telefone || '—'}</div>
+            {lead.familia?.email && <div className="flex items-center gap-2 text-slate-700"><Mail className="w-4 h-4 text-slate-400" />{lead.familia.email}</div>}
+            {lead.crianca?.idade != null && <div className="flex items-center gap-2 text-slate-700"><Baby className="w-4 h-4 text-slate-400" />{lead.crianca.idade} anos</div>}
           </div>
 
-          {lead.crianca && (
-            <div className="rounded-xl bg-slate-50 p-3 text-sm">
-              <div className="flex items-center gap-2 font-medium text-slate-700 mb-1">
-                <Baby className="w-4 h-4 text-slate-400" />
-                {lead.crianca.nome}
-              </div>
-              <div className="text-slate-500 text-xs space-y-0.5">
-                {lead.crianca.idade != null && <div>Idade: {lead.crianca.idade} anos</div>}
-                {lead.crianca.serie_desejada && <div>Série desejada: {lead.crianca.serie_desejada}</div>}
-                {lead.crianca.periodo && <div>Período: {lead.crianca.periodo}</div>}
-              </div>
-            </div>
-          )}
-
-          {lead.tags?.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {lead.tags.map((t) => (
-                <span key={t} className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
-                  {t}
-                </span>
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><CheckSquare className="w-4 h-4 text-slate-400" />Tarefas</div>
+            <div className="space-y-2 mb-3">
+              {tarefas.length === 0 && <p className="text-xs text-slate-400">Nenhuma tarefa.</p>}
+              {tarefas.map((t) => (
+                <div key={t.id} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5">
+                  <button onClick={() => toggleTarefa(t)} className="text-slate-400 hover:text-green-600">
+                    {t.concluida ? <CheckSquare className="w-4 h-4 text-green-600" /> : <Square className="w-4 h-4" />}
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-sm ${t.concluida ? 'line-through text-slate-400' : 'text-slate-700'}`}>{t.titulo}</p>
+                    <p className="text-[10px] text-slate-400">{t.tipo} · {new Date(t.data_hora).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  <button onClick={() => removerTarefa(t.id)} className="text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                </div>
               ))}
             </div>
-          )}
-
-          {lead.proxima_acao && (
-            <div className="text-sm">
-              <span className="text-slate-400">Próxima ação: </span>
-              <span className="text-slate-700">{lead.proxima_acao}</span>
+            <div className="rounded-lg bg-slate-50 p-2.5 space-y-2">
+              <input value={tTitulo} onChange={(e) => setTTitulo(e.target.value)} placeholder="Nova tarefa (ex: Ligar para confirmar visita)" className={inputCls} />
+              <div className="grid grid-cols-[auto_1fr_auto] gap-2 items-center">
+                <select value={tTipo} onChange={(e) => setTTipo(e.target.value)} className={selCls}>
+                  {TIPOS.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+                </select>
+                <input type="datetime-local" value={tData} onChange={(e) => setTData(e.target.value)} className={inputCls} />
+                <button onClick={addTarefa} className="inline-flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900"><Plus className="w-4 h-4" /></button>
+              </div>
+              {tErro && <p className="text-xs text-red-600">{tErro}</p>}
             </div>
-          )}
+          </div>
 
           <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-              <FileText className="w-4 h-4 text-slate-400" />
-              Anotações da Sara
-            </div>
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><FileText className="w-4 h-4 text-slate-400" />Anotações da Sara</div>
             {anotacoes.length === 0 ? (
               <p className="text-xs text-slate-400">Nenhuma anotação ainda.</p>
             ) : (
@@ -156,9 +206,7 @@ export function LeadDetailModal({
                 {anotacoes.map((a) => (
                   <div key={a.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
                     <p className="text-sm text-slate-700">{a.conteudo}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      {new Date(a.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                    </p>
+                    <p className="text-[10px] text-slate-400 mt-1">{new Date(a.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
                   </div>
                 ))}
               </div>
@@ -167,10 +215,7 @@ export function LeadDetailModal({
         </div>
 
         <div className="border-t border-slate-100 p-4">
-          <Link
-            href={`/chat?lead=${lead.id}`}
-            className="flex items-center justify-center gap-2 w-full rounded-lg bg-blue-600 text-white text-sm font-medium py-2.5 hover:bg-blue-700"
-          >
+          <Link href={`/chat?lead=${lead.id}`} className="flex items-center justify-center gap-2 w-full rounded-lg bg-blue-600 text-white text-sm font-medium py-2.5 hover:bg-blue-700">
             <MessageSquare className="w-4 h-4" />
             Abrir conversa
           </Link>

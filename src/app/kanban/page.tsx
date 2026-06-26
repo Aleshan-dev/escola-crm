@@ -146,7 +146,7 @@ export default function KanbanPage() {
       {detalhe && (
         <LeadDetailModal
           lead={detalhe}
-          coluna={colunas.find((c) => c.id === detalhe.coluna_id)}
+          colunas={colunas}
           onClose={() => setDetalhe(null)}
         />
       )}
