@@ -114,14 +114,24 @@ export async function POST(req: NextRequest) {
           colunaAtual
         )
 
-        const sent = await evolutionSendText(telefone, saraResult.resposta)
+        // Divide a resposta da Sara em baloes (paragrafos separados por linha em branco)
+        const baloes = saraResult.resposta
+          .split(/\n\s*\n/)
+          .map((b) => b.trim())
+          .filter(Boolean)
+          .slice(0, 3)
+        const partes = baloes.length > 0 ? baloes : [saraResult.resposta.trim()]
 
-        await supabase.from('mensagens').insert({
-          lead_id: lead.id,
-          direcao: 'out_ia',
-          conteudo: saraResult.resposta,
-          whatsapp_message_id: sent?.key?.id || null,
-        })
+        for (let i = 0; i < partes.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 1200))
+          const sent = await evolutionSendText(telefone, partes[i])
+          await supabase.from('mensagens').insert({
+            lead_id: lead.id,
+            direcao: 'out_ia',
+            conteudo: partes[i],
+            whatsapp_message_id: sent?.key?.id || null,
+          })
+        }
 
         // 5. Guard-rails de movimentação
         if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && todasColunas && colunaAtual) {
