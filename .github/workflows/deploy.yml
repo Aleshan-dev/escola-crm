@@ -1,42 +1,24 @@
 name: Deploy to Vercel (Production)
- 
-# Substitui o Deploy Hook por um deploy via Vercel CLI a partir do
-# checkout exato do push. Builda o commit real do HEAD e ignora
-# completamente a integracao Git GitHub->Vercel (que esta quebrada
-# por causa do descasamento de installation do GitHub App).
- 
+
 on:
   push:
     branches:
       - main
   workflow_dispatch:
- 
-# IDs do projeto/time da Vercel. Nao sao secretos (mas podem virar
-# secrets/variables se voce preferir). Confirmados via API da Vercel.
+
 env:
   VERCEL_ORG_ID: team_42xH34dqOWlftoxiPh3Toisc
   VERCEL_PROJECT_ID: prj_heNVdN9ZLtu7dRfMogBurPVc6ylb
- 
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
- 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
- 
+
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
- 
-      - name: Pull Vercel environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
- 
-      - name: Build (Vercel)
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
- 
-      - name: Deploy prebuilt to production
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to production (build on Vercel)
+        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
