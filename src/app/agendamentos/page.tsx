@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
-import { ChevronLeft, ChevronRight, Loader2, Plus, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2, Plus, X, Trash2 } from 'lucide-react'
 
-type Tarefa = { id: string; titulo: string; tipo: string | null; data_hora: string; concluida: boolean }
+type Tarefa = { id: string; titulo: string; tipo: string | null; data_hora: string; concluida: boolean; status: string }
 type LeadOpt = { id: string; nome: string }
 
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
@@ -14,15 +14,13 @@ const HOUR_END = 22
 const ROW_H = 48
 const GRID_COLS = '50px repeat(7, 1fr)'
 const TIPOS = ['visita', 'ligacao', 'followup', 'reuniao', 'geral']
+const STATUS = [
+  { v: 'agendada', label: 'Agendada' },
+  { v: 'realizada', label: 'Realizada' },
+  { v: 'ausente', label: 'Ausente' },
+  { v: 'cancelada', label: 'Cancelada' },
+]
 const inputCls = 'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400'
-
-const TIPO_COR: Record<string, string> = {
-  visita: 'bg-blue-100 border-blue-300 text-blue-800',
-  ligacao: 'bg-amber-100 border-amber-300 text-amber-800',
-  followup: 'bg-purple-100 border-purple-300 text-purple-800',
-  reuniao: 'bg-green-100 border-green-300 text-green-800',
-  geral: 'bg-slate-100 border-slate-300 text-slate-700',
-}
 
 function inicioSemana(base: Date): Date {
   const d = new Date(base)
@@ -32,12 +30,20 @@ function inicioSemana(base: Date): Date {
   return d
 }
 
+function corEvento(t: Tarefa): string {
+  if (t.status === 'realizada') return 'bg-green-100 border-green-300 text-green-800'
+  if (t.status === 'ausente') return 'bg-amber-100 border-amber-300 text-amber-800'
+  if (t.status === 'cancelada') return 'bg-slate-100 border-slate-300 text-slate-500 line-through'
+  if (new Date(t.data_hora).getTime() < Date.now()) return 'bg-red-100 border-red-300 text-red-800'
+  return 'bg-blue-100 border-blue-300 text-blue-800'
+}
+
 export default function AgendamentosPage() {
   const supabase = createClient()
   const [semana, setSemana] = useState(() => inicioSemana(new Date()))
   const [loading, setLoading] = useState(true)
   const [tarefas, setTarefas] = useState<Tarefa[]>([])
-  const [stats, setStats] = useState({ agendadas: 0, atrasadas: 0, realizadas: 0 })
+  const [stats, setStats] = useState({ agendadas: 0, atrasadas: 0, realizadas: 0, ausentes: 0, canceladas: 0, pct: 0 })
 
   const [leadsOpts, setLeadsOpts] = useState<LeadOpt[]>([])
   const [modal, setModal] = useState(false)
@@ -47,6 +53,8 @@ export default function AgendamentosPage() {
   const [dataV, setDataV] = useState('')
   const [erroV, setErroV] = useState<string | null>(null)
   const [salvandoV, setSalvandoV] = useState(false)
+
+  const [eventoSel, setEventoSel] = useState<Tarefa | null>(null)
 
   const fimSemana = useMemo(() => {
     const d = new Date(semana)
@@ -66,19 +74,21 @@ export default function AgendamentosPage() {
     setLoading(true)
     const { data } = await supabase
       .from('tarefas')
-      .select('id, titulo, tipo, data_hora, concluida')
+      .select('id, titulo, tipo, data_hora, concluida, status')
       .gte('data_hora', semana.toISOString())
       .lt('data_hora', fimSemana.toISOString())
     setTarefas((data as unknown as Tarefa[]) || [])
 
-    const { data: vis } = await supabase.from('tarefas').select('data_hora, concluida').eq('tipo', 'visita')
+    const { data: vis } = await supabase.from('tarefas').select('data_hora, status').eq('tipo', 'visita')
     const now = Date.now()
-    const list = (vis as unknown as { data_hora: string; concluida: boolean }[]) || []
-    setStats({
-      agendadas: list.filter((t) => !t.concluida && new Date(t.data_hora).getTime() >= now).length,
-      atrasadas: list.filter((t) => !t.concluida && new Date(t.data_hora).getTime() < now).length,
-      realizadas: list.filter((t) => t.concluida).length,
-    })
+    const list = (vis as unknown as { data_hora: string; status: string }[]) || []
+    const agendadas = list.filter((t) => t.status === 'agendada' && new Date(t.data_hora).getTime() >= now).length
+    const atrasadas = list.filter((t) => t.status === 'agendada' && new Date(t.data_hora).getTime() < now).length
+    const realizadas = list.filter((t) => t.status === 'realizada').length
+    const ausentes = list.filter((t) => t.status === 'ausente').length
+    const canceladas = list.filter((t) => t.status === 'cancelada').length
+    const baseTotal = agendadas + atrasadas + realizadas + ausentes
+    setStats({ agendadas, atrasadas, realizadas, ausentes, canceladas, pct: baseTotal ? Math.round((realizadas / baseTotal) * 100) : 0 })
     setLoading(false)
   }
 
@@ -119,6 +129,17 @@ export default function AgendamentosPage() {
     setModal(false); setLeadSel(''); setTituloV(''); setDataV(''); load()
   }
 
+  async function mudarStatus(novo: string) {
+    if (!eventoSel) return
+    await supabase.from('tarefas').update({ status: novo, concluida: novo === 'realizada' }).eq('id', eventoSel.id)
+    setEventoSel(null); load()
+  }
+  async function removerEvento() {
+    if (!eventoSel) return
+    await supabase.from('tarefas').delete().eq('id', eventoSel.id)
+    setEventoSel(null); load()
+  }
+
   const rotuloMes = dias[0].toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
   const hojeStr = new Date().toDateString()
 
@@ -144,9 +165,15 @@ export default function AgendamentosPage() {
           <div className="w-56 flex-shrink-0 hidden md:block">
             <div className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="text-sm font-semibold mb-3">Visitas</div>
+              <div className="mb-3">
+                <div className="flex items-center justify-between text-xs text-slate-500 mb-1"><span>% de Realização</span><span className="font-semibold text-slate-700">{stats.pct}%</span></div>
+                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-green-500 rounded-full" style={{ width: `${stats.pct}%` }} /></div>
+              </div>
               <StatRow label="Agendadas" valor={stats.agendadas} cor="text-blue-600" />
               <StatRow label="Atrasadas" valor={stats.atrasadas} cor="text-red-600" />
               <StatRow label="Realizadas" valor={stats.realizadas} cor="text-green-600" />
+              <StatRow label="Ausentes" valor={stats.ausentes} cor="text-amber-600" />
+              <StatRow label="Canceladas" valor={stats.canceladas} cor="text-slate-500" />
             </div>
           </div>
 
@@ -181,12 +208,11 @@ export default function AgendamentosPage() {
                         const dt = new Date(t.data_hora)
                         const pos = (dt.getHours() + dt.getMinutes() / 60 - HOUR_START) * ROW_H
                         if (pos < 0 || pos > horas.length * ROW_H) return null
-                        const cor = TIPO_COR[t.tipo || 'geral'] || TIPO_COR.geral
                         return (
-                          <div key={t.id} className={`absolute left-1 right-1 rounded-md border px-1.5 py-1 text-[10px] leading-tight overflow-hidden ${cor} ${t.concluida ? 'opacity-60 line-through' : ''}`} style={{ top: pos, minHeight: ROW_H - 6 }}>
+                          <button key={t.id} onClick={() => setEventoSel(t)} className={`absolute left-1 right-1 rounded-md border px-1.5 py-1 text-[10px] leading-tight overflow-hidden text-left ${corEvento(t)}`} style={{ top: pos, minHeight: ROW_H - 6 }}>
                             <div className="font-medium truncate">{t.titulo}</div>
                             <div className="opacity-70">{dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
-                          </div>
+                          </button>
                         )
                       })}
                     </div>
@@ -234,6 +260,32 @@ export default function AgendamentosPage() {
             <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
               <button onClick={() => setModal(false)} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancelar</button>
               <button onClick={agendar} disabled={salvandoV} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{salvandoV && <Loader2 className="w-4 h-4 animate-spin" />} Agendar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {eventoSel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEventoSel(null)}>
+          <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-2 border-b border-slate-100 p-5">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold truncate">{eventoSel.titulo}</h2>
+                <span className="text-xs text-slate-500">{new Date(eventoSel.data_hora).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+              <button onClick={() => setEventoSel(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-5">
+              <div className="text-xs font-medium text-slate-500 mb-2">Status</div>
+              <div className="grid grid-cols-2 gap-2">
+                {STATUS.map((s) => (
+                  <button key={s.v} onClick={() => mudarStatus(s.v)} className={`rounded-lg border px-3 py-2 text-sm font-medium ${eventoSel.status === s.v ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{s.label}</button>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-between gap-2 border-t border-slate-100 p-4">
+              <button onClick={removerEvento} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Excluir</button>
+              <button onClick={() => setEventoSel(null)} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Fechar</button>
             </div>
           </div>
         </div>
