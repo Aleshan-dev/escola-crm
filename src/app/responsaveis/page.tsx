@@ -127,16 +127,11 @@ export default function ResponsaveisPage() {
                 ) : visiveis.length === 0 ? (
                   <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">Nenhum responsável encontrado.</td></tr>
                 ) : visiveis.map((f) => {
-                  const lead = f.leads[0]
                   const pt = proximaTarefaDe(f)
                   return (
                     <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50">
                       <td className="px-4 py-3">
-                        {lead ? (
-                          <Link href={`/chat?lead=${lead.id}`} className="font-medium text-blue-600 hover:underline">{f.nome_responsavel}</Link>
-                        ) : (
-                          <span className="font-medium text-slate-700">{f.nome_responsavel}</span>
-                        )}
+                        <Link href={`/responsaveis/${f.id}`} className="font-medium text-blue-600 hover:underline">{f.nome_responsavel}</Link>
                       </td>
                       <td className="px-4 py-3 text-slate-600">{f.telefone || '—'}</td>
                       <td className="px-4 py-3 text-slate-600">{f.email || '—'}</td>
