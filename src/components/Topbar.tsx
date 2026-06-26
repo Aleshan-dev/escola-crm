@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
-import { LayoutGrid, MessageSquare, LogOut, School, Bot, Settings } from 'lucide-react'
+import { LayoutGrid, MessageSquare, LogOut, School, Bot, Settings, CalendarDays } from 'lucide-react'
 
 export function Topbar() {
   const pathname = usePathname()
@@ -18,6 +18,7 @@ export function Topbar() {
 
   const tabs = [
     { href: '/kanban', label: 'Kanban', icon: LayoutGrid },
+    { href: '/agendamentos', label: 'Agenda', icon: CalendarDays },
     { href: '/chat', label: 'Conversas', icon: MessageSquare },
     { href: '/configuracoes', label: 'Configurações', icon: Settings },
   ]
