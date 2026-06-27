@@ -42,6 +42,7 @@ export default function KanbanPage() {
       supabase
         .from('leads')
         .select('*, familia:familias(*), crianca:criancas(*)')
+        .eq('arquivado', false)
         .order('criado_em', { ascending: false }),
     ])
     if (cols.data) setColunas(cols.data as Coluna[])
@@ -108,6 +109,7 @@ export default function KanbanPage() {
           />
         </div>
         <span className="text-xs text-slate-500">{leadsFiltrados.length} lead(s)</span>
+        <Link href="/arquivados" className="text-xs text-slate-500 hover:text-slate-700 underline">Arquivados</Link>
       </div>
 
       <div className="flex-1 overflow-hidden">

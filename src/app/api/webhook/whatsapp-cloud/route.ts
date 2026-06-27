@@ -5,7 +5,8 @@ import { enviarTextoCloud } from '@/lib/whatsapp-cloud'
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
-  if (p.get('hub.mode') === 'subscribe' && p.get('hub.verify_token') === process.env.WHATSAPP_VERIFY_TOKEN) {
+  const vt = (process.env.WHATSAPP_VERIFY_TOKEN || '').trim()
+  if (p.get('hub.mode') === 'subscribe' && vt !== '' && (p.get('hub.verify_token') || '').trim() === vt) {
     return new NextResponse(p.get('hub.challenge') || '', { status: 200 })
   }
   return new NextResponse('forbidden', { status: 403 })
