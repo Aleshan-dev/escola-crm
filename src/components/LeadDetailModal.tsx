@@ -107,6 +107,11 @@ export function LeadDetailModal({
     carregarTarefas()
   }
 
+  async function arquivarLead() {
+    await supabase.from('leads').update({ arquivado: true }).eq('id', lead.id)
+    onClose()
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -214,11 +219,14 @@ export function LeadDetailModal({
           </div>
         </div>
 
-        <div className="border-t border-slate-100 p-4">
+        <div className="border-t border-slate-100 p-4 space-y-2">
           <Link href={`/chat?lead=${lead.id}`} className="flex items-center justify-center gap-2 w-full rounded-lg bg-blue-600 text-white text-sm font-medium py-2.5 hover:bg-blue-700">
             <MessageSquare className="w-4 h-4" />
             Abrir conversa
           </Link>
+          <button onClick={arquivarLead} className="w-full rounded-lg border border-slate-200 text-slate-600 text-sm font-medium py-2 hover:bg-slate-50">
+            Arquivar lead
+          </button>
         </div>
       </div>
     </div>
