@@ -39,7 +39,7 @@ export async function middleware(request: NextRequest) {
 
   // Logado e tentando acessar login → manda pro kanban
   if (user && isAuthRoute) {
-    return NextResponse.redirect(new URL('/kanban', request.url))
+    return NextResponse.redirect(new URL('/inicio', request.url))
   }
 
   return supabaseResponse
