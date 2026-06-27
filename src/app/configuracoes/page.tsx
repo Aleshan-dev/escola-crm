@@ -48,6 +48,7 @@ const secoes: { nome: string; itens: Item[] }[] = [
     itens: [
       { titulo: 'Google Agenda', descricao: 'Sincronize visitas com o Google Calendar.', href: '/configuracoes/integracoes', icon: CalendarCheck },
       { titulo: 'WhatsApp (Evolution)', descricao: 'Status e conexão do WhatsApp da escola.', href: '/configuracoes/whatsapp', icon: MessageSquareText },
+      { titulo: 'WhatsApp Oficial (Meta)', descricao: 'Canal pela API oficial da Meta (Cloud API).', href: '/configuracoes/whatsapp-oficial', icon: MessageSquareText },
     ],
   },
 ]
