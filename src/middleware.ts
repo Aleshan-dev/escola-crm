@@ -28,12 +28,13 @@ export async function middleware(request: NextRequest) {
   const url = request.nextUrl
   const isAuthRoute = url.pathname.startsWith('/login')
   const isApiWebhook = url.pathname.startsWith('/api/webhook') || url.pathname.startsWith('/api/cron')
+  const isPublic = url.pathname.startsWith('/privacy') || url.pathname.startsWith('/termos')
 
   // Webhooks do WhatsApp não precisam de auth
   if (isApiWebhook) return supabaseResponse
 
   // Não logado → manda pra login
-  if (!user && !isAuthRoute) {
+  if (!user && !isAuthRoute && !isPublic) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
