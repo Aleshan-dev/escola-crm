@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
-import { enviarTextoCloud } from '@/lib/whatsapp-cloud'
+import { enviarTextoCloud, enviarTextoCloudConta } from '@/lib/whatsapp-cloud'
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
@@ -17,6 +17,13 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const value = body?.entry?.[0]?.changes?.[0]?.value
+    const phoneNumberId: string = value?.metadata?.phone_number_id || ''
+    const { data: conta } = await supabase
+      .from('whatsapp_contas')
+      .select('phone_number_id, token')
+      .eq('phone_number_id', phoneNumberId)
+      .eq('ativo', true)
+      .maybeSingle()
     const msg = value?.messages?.[0]
     if (!msg || msg.type !== 'text') return NextResponse.json({ ignored: true })
 
@@ -59,8 +66,19 @@ export async function POST(req: NextRequest) {
       const partes = baloes.length > 0 ? baloes : [saraResult.resposta.trim()]
       for (let i = 0; i < partes.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1200))
-        const sent = await enviarTextoCloud(telefone, partes[i])
-        await supabase.from('mensagens').insert({ lead_id: leadId, direcao: 'out_ia', conteudo: partes[i], whatsapp_message_id: sent?.messages?.[0]?.id || null })
+        let sent: { messages?: { id?: string }[] } | null = null
+        let statusEnvio = 'enviado'
+        let erroEnvio: string | null = null
+        try {
+          sent = conta?.token
+            ? await enviarTextoCloudConta(conta.phone_number_id, conta.token, telefone, partes[i])
+            : await enviarTextoCloud(telefone, partes[i])
+        } catch (err) {
+          statusEnvio = 'falha'
+          erroEnvio = err instanceof Error ? err.message : String(err)
+          console.error(`[whatsapp-cloud] envio falhou lead=${leadId} tel=${telefone}: ${erroEnvio}`)
+        }
+        await supabase.from('mensagens').insert({ lead_id: leadId, direcao: 'out_ia', conteudo: partes[i], whatsapp_message_id: sent?.messages?.[0]?.id || null, status: statusEnvio, erro_envio: erroEnvio })
       }
 
       if (saraResult.resumo_anotacao && saraResult.resumo_anotacao.trim()) {
