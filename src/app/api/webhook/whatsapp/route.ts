@@ -124,12 +124,23 @@ export async function POST(req: NextRequest) {
 
         for (let i = 0; i < partes.length; i++) {
           if (i > 0) await new Promise((r) => setTimeout(r, 1200))
-          const sent = await evolutionSendText(telefone, partes[i])
+          let sent: { key?: { id?: string } } | null = null
+          let statusEnvio = 'enviado'
+          let erroEnvio: string | null = null
+          try {
+            sent = await evolutionSendText(telefone, partes[i])
+          } catch (err) {
+            statusEnvio = 'falha'
+            erroEnvio = err instanceof Error ? err.message : String(err)
+            console.error(`[whatsapp] envio falhou lead=${lead.id} tel=${telefone}: ${erroEnvio}`)
+          }
           await supabase.from('mensagens').insert({
             lead_id: lead.id,
             direcao: 'out_ia',
             conteudo: partes[i],
             whatsapp_message_id: sent?.key?.id || null,
+            status: statusEnvio,
+            erro_envio: erroEnvio,
           })
         }
 
