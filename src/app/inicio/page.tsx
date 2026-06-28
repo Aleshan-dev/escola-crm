@@ -1,17 +1,12 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
-import { Loader2, GraduationCap, Users, BarChart3, type LucideIcon } from 'lucide-react'
+import { Loader2, LineChart, ChevronLeft, ChevronRight, ArrowRight } from 'lucide-react'
 
-type Lead = { id: string; coluna_id: string; criado_em: string; entrou_coluna_em: string; responsavel_id: string | null; crianca: { serie_desejada: string | null } | null }
-type Coluna = { id: string; nome: string; ordem: number; funil_id: string }
-type Tarefa = { id: string; criado_em: string; lead_id: string | null; responsavel_id: string | null }
-type Funil = { id: string; nome: string }
-type Usuario = { id: string; nome: string }
-
-const PERIODOS = [{ v: 'hoje', l: 'Hoje' }, { v: 'semana', l: 'Semana' }, { v: 'mes', l: 'Mês' }, { v: 'ano', l: 'Ano' }]
+type Row = { nome: string; qtd: number }
 
 function inicioPeriodo(p: string): number {
   const d = new Date(); d.setHours(0, 0, 0, 0)
@@ -20,176 +15,173 @@ function inicioPeriodo(p: string): number {
   if (p === 'ano') { d.setMonth(0, 1); return d.getTime() }
   d.setDate(1); return d.getTime()
 }
-
-function Card({ titulo, meta, realizado, prev, pct, total, icon: Icon }: { titulo: string; meta: number; realizado: number; prev: number; pct: string; total: number; icon: LucideIcon }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <div className="rounded-lg bg-blue-50 p-1.5 text-blue-600"><Icon className="w-4 h-4" /></div>
-        <span className="text-sm font-semibold">Número de <span className="text-blue-600">{titulo}</span></span>
-      </div>
-      <div className="grid grid-cols-4 gap-2 text-center">
-        <div><div className="text-[10px] uppercase text-slate-400">Meta</div><div className="text-2xl font-bold text-slate-800">{meta}</div></div>
-        <div><div className="text-[10px] uppercase text-slate-400">Realizado</div><div className="text-2xl font-bold text-slate-800">{realizado}</div></div>
-        <div><div className="text-[10px] uppercase text-slate-400">Previsão</div><div className="text-2xl font-bold text-red-600">{prev}</div><div className="text-[10px] text-slate-400">({pct}%)</div></div>
-        <div><div className="text-[10px] uppercase text-slate-400">Total</div><div className="text-2xl font-bold text-blue-600">{total}</div></div>
-      </div>
-    </div>
-  )
-}
+function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1) }
 
 export default function InicioPage() {
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
-  const [nome, setNome] = useState('')
-  const [funis, setFunis] = useState<Funil[]>([])
+  const [nomeUser, setNomeUser] = useState('')
+  const [funis, setFunis] = useState<{ id: string; nome: string }[]>([])
   const [funilSel, setFunilSel] = useState('')
-  const [colunas, setColunas] = useState<Coluna[]>([])
-  const [leads, setLeads] = useState<Lead[]>([])
-  const [tarefas, setTarefas] = useState<Tarefa[]>([])
-  const [metas, setMetas] = useState<{ nome: string; valor_meta: number }[]>([])
-  const [usuarios, setUsuarios] = useState<Usuario[]>([])
+  const [colunas, setColunas] = useState<any[]>([])
+  const [leads, setLeads] = useState<any[]>([])
+  const [tarefas, setTarefas] = useState<any[]>([])
+  const [metas, setMetas] = useState<any[]>([])
+  const [usuarios, setUsuarios] = useState<any[]>([])
+  const [dim, setDim] = useState<'serie' | 'origem' | 'dono'>('serie')
   const [periodo, setPeriodo] = useState('mes')
 
   useEffect(() => {
     (async () => {
       const { data: u } = await supabase.auth.getUser()
-      if (u?.user?.email) setNome(u.user.email.split('@')[0])
+      const email = u?.user?.email || ''
+      setNomeUser(email ? email.split('@')[0] : '')
       const [fr, cr, lr, tr, mr, ur] = await Promise.all([
         supabase.from('funis').select('id, nome').order('criado_em'),
         supabase.from('colunas').select('id, nome, ordem, funil_id').order('ordem'),
-        supabase.from('leads').select('id, coluna_id, criado_em, entrou_coluna_em, responsavel_id, crianca:criancas(serie_desejada)').eq('arquivado', false),
+        supabase.from('leads').select('*, crianca:criancas(serie_desejada)').eq('arquivado', false),
         supabase.from('tarefas').select('id, criado_em, lead_id, responsavel_id'),
         supabase.from('metas_crescimento').select('nome, valor_meta'),
         supabase.from('usuarios').select('id, nome'),
       ])
-      const fs = (fr.data as unknown as Funil[]) || []
-      setFunis(fs)
-      setFunilSel(fs[0]?.id || '')
-      setColunas((cr.data as unknown as Coluna[]) || [])
-      setLeads((lr.data as unknown as Lead[]) || [])
-      setTarefas((tr.data as unknown as Tarefa[]) || [])
-      setMetas((mr.data as unknown as { nome: string; valor_meta: number }[]) || [])
-      setUsuarios((ur.data as unknown as Usuario[]) || [])
+      const fs = (fr.data as any[]) || []
+      setFunis(fs); setFunilSel(fs[0]?.id || '')
+      setColunas((cr.data as any[]) || [])
+      setLeads((lr.data as any[]) || [])
+      setTarefas((tr.data as any[]) || [])
+      setMetas((mr.data as any[]) || [])
+      setUsuarios((ur.data as any[]) || [])
       setLoading(false)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const dados = useMemo(() => {
-    const colsFunil = colunas.filter((c) => !funilSel || c.funil_id === funilSel)
-    const colIds = new Set(colsFunil.map((c) => c.id))
-    const leadsFunil = leads.filter((l) => colIds.has(l.coluna_id))
-    const leadIds = new Set(leadsFunil.map((l) => l.id))
-    const tarefasFunil = tarefas.filter((t) => t.lead_id && leadIds.has(t.lead_id))
-    const colMatric = colsFunil.find((c) => /matric/i.test(c.nome))
-    const iniMes = (() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime() })()
+  const nomeUsuario = (id: string | null) => usuarios.find((x) => x.id === id)?.nome || 'Sem responsável'
+
+  const d = useMemo(() => {
+    const cols = colunas.filter((c) => !funilSel || c.funil_id === funilSel)
+    const colIds = new Set(cols.map((c) => c.id))
+    const ls = leads.filter((l) => colIds.has(l.coluna_id))
+    const leadIds = new Set(ls.map((l) => l.id))
+    const ts = tarefas.filter((t) => t.lead_id && leadIds.has(t.lead_id))
+    const colMatric = cols.find((c) => /matric/i.test(c.nome))
+    const iniMes = (() => { const x = new Date(); x.setDate(1); x.setHours(0, 0, 0, 0); return x.getTime() })()
     const somaMeta = (re: RegExp) => metas.filter((x) => re.test(x.nome || '')).reduce((s, x) => s + (x.valor_meta || 0), 0)
 
-    const contatosMes = leadsFunil.filter((l) => new Date(l.criado_em).getTime() >= iniMes).length
-    const matriculasMes = colMatric ? leadsFunil.filter((l) => l.coluna_id === colMatric.id && new Date(l.entrou_coluna_em).getTime() >= iniMes).length : 0
+    const contatosMes = ls.filter((l) => new Date(l.criado_em).getTime() >= iniMes).length
+    const matricLeads = colMatric ? ls.filter((l) => l.coluna_id === colMatric.id) : []
+    const matriculasMes = matricLeads.filter((l) => new Date(l.entrou_coluna_em || l.criado_em).getTime() >= iniMes).length
 
-    const porEtapa = colsFunil.map((c) => ({ nome: c.nome, qtd: leadsFunil.filter((l) => l.coluna_id === c.id).length }))
-    const maxEtapa = Math.max(1, ...porEtapa.map((e) => e.qtd))
-
-    const gs: Record<string, number> = {}
-    for (const l of leadsFunil) { const s = l.crianca?.serie_desejada || 'Sem série'; gs[s] = (gs[s] || 0) + 1 }
-    const porSerie = Object.entries(gs).map(([serie, qtd]) => ({ serie, qtd })).sort((a, b) => b.qtd - a.qtd)
+    const chave = (l: any) => dim === 'serie' ? (l.crianca?.serie_desejada || 'Sem série') : dim === 'origem' ? (l.origem || 'Sem origem') : nomeUsuario(l.responsavel_id)
+    const g: Record<string, number> = {}
+    for (const l of matricLeads) { const k = chave(l); g[k] = (g[k] || 0) + 1 }
+    const tabela: Row[] = Object.entries(g).map(([nome, qtd]) => ({ nome, qtd })).sort((a, b) => b.qtd - a.qtd)
+    const totalAlunos = matricLeads.length
 
     const ini = inicioPeriodo(periodo)
-    const nomeUsuario = (id: string | null) => usuarios.find((x) => x.id === id)?.nome || 'Sem responsável'
     const opMap: Record<string, { nome: string; matriculas: number; tarefas: number; contatos: number }> = {}
-    const garante = (id: string | null) => { const k = id || 'sem'; if (!opMap[k]) opMap[k] = { nome: nomeUsuario(id), matriculas: 0, tarefas: 0, contatos: 0 }; return opMap[k] }
-    for (const l of leadsFunil) {
-      if (new Date(l.criado_em).getTime() >= ini) garante(l.responsavel_id).contatos++
-      if (colMatric && l.coluna_id === colMatric.id && new Date(l.entrou_coluna_em).getTime() >= ini) garante(l.responsavel_id).matriculas++
+    const op = (id: string | null) => { const k = id || 'sem'; if (!opMap[k]) opMap[k] = { nome: nomeUsuario(id), matriculas: 0, tarefas: 0, contatos: 0 }; return opMap[k] }
+    for (const l of ls) {
+      if (new Date(l.criado_em).getTime() >= ini) op(l.responsavel_id).contatos++
+      if (colMatric && l.coluna_id === colMatric.id && new Date(l.entrou_coluna_em || l.criado_em).getTime() >= ini) op(l.responsavel_id).matriculas++
     }
-    for (const t of tarefasFunil) {
-      if (new Date(t.criado_em).getTime() >= ini) garante(t.responsavel_id).tarefas++
-    }
+    for (const t of ts) { if (new Date(t.criado_em).getTime() >= ini) op(t.responsavel_id).tarefas++ }
     const operadores = Object.values(opMap)
-    if (operadores.length === 0) operadores.push({ nome: 'Sem responsável', matriculas: 0, tarefas: 0, contatos: 0 })
+    if (operadores.length === 0) operadores.push({ nome: nomeUser ? cap(nomeUser) : 'Operador', matriculas: 0, tarefas: 0, contatos: 0 })
 
     return {
-      contatosTotal: leadsFunil.length, contatosMes, metaContatos: somaMeta(/contato/i),
-      matriculasTotal: colMatric ? leadsFunil.filter((l) => l.coluna_id === colMatric.id).length : 0,
-      matriculasMes, metaMatriculas: somaMeta(/matr[ií]c/i),
-      porEtapa, maxEtapa, porSerie, operadores,
+      contatosTotal: ls.length, contatosMes, metaContatos: somaMeta(/contato/i),
+      matriculasTotal: matricLeads.length, matriculasMes, metaMatriculas: somaMeta(/matr[ií]c/i),
+      tabela, totalAlunos, operadores,
     }
-  }, [colunas, leads, tarefas, metas, usuarios, funilSel, periodo])
+  }, [colunas, leads, tarefas, metas, usuarios, funilSel, dim, periodo, nomeUser])
 
-  function previsao(realizado: number) {
-    const hoje = new Date(); const dia = hoje.getDate()
-    const diasMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate()
-    return dia > 0 ? Math.round((realizado / dia) * diasMes) : realizado
+  function previsao(r: number) {
+    const h = new Date(); const dia = h.getDate()
+    const dm = new Date(h.getFullYear(), h.getMonth() + 1, 0).getDate()
+    return dia > 0 ? Math.round((r / dia) * dm) : r
   }
-  function pct(p: number, meta: number) { return meta > 0 ? ((p / meta) * 100).toFixed(2) : '0.00' }
+  const pct = (p: number, m: number) => m > 0 ? ((p / m) * 100).toFixed(2).replace('.', ',') : '0,00'
+  const mesAno = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen flex flex-col bg-[#EEF2FF]">
       <Topbar />
-      <div className="p-5 max-w-6xl mx-auto w-full">
-        <h1 className="text-xl font-semibold">Bem-vindo(a){nome ? `, ${nome}` : ''}!</h1>
-        <p className="text-sm text-slate-500 mb-5">Desde seu último acesso, aqui está o resumo do funil.</p>
+      <div className="mx-auto w-full max-w-5xl p-6">
+        <h1 className="text-2xl font-bold text-slate-900">Bem-vindo(a){nomeUser ? `, ${cap(nomeUser)}` : ''}!</h1>
+        <p className="mb-5 text-sm text-slate-500">Desde seu último acesso, estes foram os principais acontecimentos que podem interessá-lo(a):</p>
 
         {loading ? (
-          <div className="flex items-center gap-2 text-slate-500"><Loader2 className="w-5 h-5 animate-spin" /> Carregando...</div>
+          <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Carregando...</div>
         ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Funil</label>
-              <select value={funilSel} onChange={(e) => setFunilSel(e.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400 bg-white max-w-sm w-full">
-                {funis.length === 0 && <option value="">Todos</option>}
+          <div className="space-y-5">
+            <div className="relative max-w-sm">
+              <label className="absolute -top-2 left-3 bg-[#EEF2FF] px-1 text-xs font-medium text-blue-700">Funil</label>
+              <select value={funilSel} onChange={(e) => setFunilSel(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500">
+                {funis.length === 0 && <option value="">Funil de Captação</option>}
                 {funis.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
               </select>
             </div>
 
-            <div className="grid lg:grid-cols-3 gap-4">
-              <Card titulo="novas matrículas" meta={dados.metaMatriculas} realizado={dados.matriculasMes} prev={previsao(dados.matriculasMes)} pct={pct(previsao(dados.matriculasMes), dados.metaMatriculas)} total={dados.matriculasTotal} icon={GraduationCap} />
-              <Card titulo="novos contatos" meta={dados.metaContatos} realizado={dados.contatosMes} prev={previsao(dados.contatosMes)} pct={pct(previsao(dados.contatosMes), dados.metaContatos)} total={dados.contatosTotal} icon={Users} />
-              <div className="rounded-xl border border-slate-200 bg-white p-5">
-                <div className="text-sm font-semibold mb-3">Por série</div>
-                {dados.porSerie.length === 0 ? <p className="text-sm text-slate-400">Sem dados.</p> : (
-                  <div className="space-y-1.5 max-h-44 overflow-y-auto">
-                    {dados.porSerie.map((s) => (
-                      <div key={s.serie} className="flex items-center justify-between text-sm"><span className="text-slate-600">{s.serie}</span><span className="font-semibold text-blue-600">{s.qtd}</span></div>
-                    ))}
-                  </div>
-                )}
-              </div>
+            <div className="flex gap-4 overflow-x-auto pb-1">
+              <KpiCard noun="novas matrículas" meta={d.metaMatriculas} realizado={d.matriculasMes} prev={previsao(d.matriculasMes)} pct={pct(previsao(d.matriculasMes), d.metaMatriculas)} total={d.matriculasTotal} />
+              <KpiCard noun="novos contatos" meta={d.metaContatos} realizado={d.contatosMes} prev={previsao(d.contatosMes)} pct={pct(previsao(d.contatosMes), d.metaContatos)} total={d.contatosTotal} />
             </div>
 
+            <a className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-blue-600 hover:underline">
+              <LineChart className="h-4 w-4" /> Analisar Gráficos
+            </a>
+
             <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="flex items-center gap-2 text-sm font-semibold mb-4"><BarChart3 className="w-4 h-4 text-blue-600" /> Leads por etapa</div>
-              <div className="space-y-2">
-                {dados.porEtapa.map((e) => (
-                  <div key={e.nome} className="flex items-center gap-3">
-                    <span className="w-36 text-xs text-slate-600 truncate text-right">{e.nome}</span>
-                    <div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden">
-                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(e.qtd / dados.maxEtapa) * 100}%` }} />
-                    </div>
-                    <span className="w-8 text-sm font-semibold text-slate-700 text-right">{e.qtd}</span>
-                  </div>
+              <h2 className="mb-3 font-bold text-slate-900">Acompanhamento das matrículas</h2>
+              <div className="mb-2 flex gap-2 text-sm">
+                {(['serie', 'origem', 'dono'] as const).map((k) => (
+                  <button key={k} onClick={() => setDim(k)} className={`rounded-lg px-3 py-1 font-semibold ${dim === k ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}>
+                    {k === 'serie' ? 'Série' : k === 'origem' ? 'Origem' : 'Dono'}
+                  </button>
                 ))}
               </div>
+              {d.tabela.length === 0 ? <p className="py-3 text-sm text-slate-400">Nenhuma matrícula ainda.</p> : (
+                <div className="divide-y divide-slate-100">
+                  {d.tabela.map((r) => {
+                    const p = d.totalAlunos > 0 ? Math.round((r.qtd / d.totalAlunos) * 100) : 0
+                    return (
+                      <div key={r.nome} className="flex items-center gap-3 py-2.5">
+                        <span className="w-40 truncate text-sm text-slate-700">{r.nome}</span>
+                        <div className="flex-1"><div className="h-2 overflow-hidden rounded-full bg-blue-100"><div className="h-2 rounded-full bg-blue-600" style={{ width: `${p}%` }} /></div></div>
+                        <span className="w-20 text-right text-sm text-slate-600">{r.qtd} ({p}%)</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <div className="mt-3 text-sm font-semibold text-slate-700">Total de alunos: {d.totalAlunos}</div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-sm font-semibold">Acompanhamento de operadores</span>
-                <div className="flex gap-1">
-                  {PERIODOS.map((p) => (
-                    <button key={p.v} onClick={() => setPeriodo(p.v)} className={`text-xs px-2.5 py-1 rounded-lg font-medium ${periodo === p.v ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}>{p.l}</button>
+            <div className="rounded-xl bg-[#E8EEF9] p-5">
+              <h2 className="mb-3 font-bold text-slate-900">Acompanhamento de operadores</h2>
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <button onClick={() => setPeriodo('hoje')} className={`rounded-lg border px-3 py-1 text-sm ${periodo === 'hoje' ? 'border-blue-500 bg-white text-blue-700' : 'border-slate-300 bg-white text-slate-700'}`}>Hoje</button>
+                <div className="flex items-center gap-1 text-slate-400"><ChevronLeft className="h-4 w-4" /><span className="text-sm font-bold capitalize text-blue-700">{mesAno}</span><ChevronRight className="h-4 w-4" /></div>
+                <div className="flex gap-3 text-sm">
+                  {[['semana', 'Semanal'], ['mes', 'Mensal'], ['ano', 'Anual']].map(([v, l]) => (
+                    <button key={v} onClick={() => setPeriodo(v)} className={`font-medium ${periodo === v ? 'text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}>{l}</button>
                   ))}
                 </div>
               </div>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {dados.operadores.map((op, i) => (
-                  <div key={i} className="rounded-lg border border-slate-100 p-3">
-                    <div className="text-sm font-medium mb-2">{op.nome}</div>
-                    <div className="flex items-center justify-between text-xs py-0.5"><span className="text-slate-500">Matrículas realizadas</span><span className="font-semibold">{op.matriculas}</span></div>
-                    <div className="flex items-center justify-between text-xs py-0.5"><span className="text-slate-500">Tarefas cadastradas</span><span className="font-semibold">{op.tarefas}</span></div>
-                    <div className="flex items-center justify-between text-xs py-0.5"><span className="text-slate-500">Novos contatos</span><span className="font-semibold">{op.contatos}</span></div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {d.operadores.map((o, i) => (
+                  <div key={i} className="rounded-xl bg-white p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white">{o.nome.slice(0, 2).toUpperCase()}</div>
+                      <span className="text-sm font-medium text-slate-800">{o.nome}</span>
+                    </div>
+                    <div className="divide-y divide-slate-100 text-sm">
+                      <MetricRow label="Matrículas realizadas" v={o.matriculas} />
+                      <MetricRow label="Tarefas cadastradas" v={o.tarefas} />
+                      <MetricRow label="Número de novos contatos" v={o.contatos} />
+                    </div>
+                    <a className="mt-3 inline-flex cursor-pointer items-center gap-1 text-sm font-medium text-blue-600 hover:underline">Aprofundar casos trabalhados <ArrowRight className="h-3.5 w-3.5" /></a>
                   </div>
                 ))}
               </div>
@@ -197,6 +189,38 @@ export default function InicioPage() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function KpiCard({ noun, meta, realizado, prev, pct, total }: { noun: string; meta: number; realizado: number; prev: number; pct: string; total: number }) {
+  return (
+    <div className="min-w-[340px] flex-1 rounded-xl border border-blue-100 bg-white p-5 shadow-sm">
+      <h3 className="mb-4 text-sm font-semibold text-slate-900">Número de <span className="text-blue-600">{noun}</span></h3>
+      <div className="flex items-stretch">
+        <div className="flex-1">
+          <div className="mb-2 text-xs font-semibold text-blue-600">Mensal</div>
+          <div className="grid grid-cols-3 gap-2">
+            <div><div className="text-[10px] uppercase text-slate-400">Meta</div><div className="text-3xl font-bold text-slate-900">{meta}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400">Realizado</div><div className="text-3xl font-bold text-slate-900">{realizado}</div></div>
+            <div><div className="text-[10px] uppercase text-slate-400">Previsão</div><div className="text-3xl font-bold text-red-600">{prev}</div><div className="text-[11px] font-medium text-red-600">({pct}%)</div></div>
+          </div>
+        </div>
+        <div className="mx-4 w-px bg-slate-200" />
+        <div className="flex flex-col justify-start">
+          <div className="mb-2 text-xs font-semibold text-blue-600">Funil Total</div>
+          <div className="text-3xl font-bold text-slate-900">{total}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MetricRow({ label, v }: { label: string; v: number }) {
+  return (
+    <div className="flex items-center justify-between py-2">
+      <span className="text-slate-600">{label}</span>
+      <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800">{v}</span>
     </div>
   )
 }

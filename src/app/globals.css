@@ -6,3 +6,6 @@
 }
 
 html, body { height: 100%; }
+
+/* barra lateral fixa (w-16 = 4rem) */
+body { padding-left: 4rem; }
