@@ -1,11 +1,7 @@
 import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
 
-let _openai: OpenAI | null = null
-function getOpenAI(): OpenAI {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  return _openai
-}
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export type SaraColuna = {
   id: string
@@ -13,12 +9,33 @@ export type SaraColuna = {
   ordem: number
 }
 
+export type SaraFamiliaDados = {
+  nome_responsavel?: string
+  email?: string
+  cep?: string
+  rua?: string
+  numero?: string
+  bairro?: string
+  cidade?: string
+  estado?: string
+}
+
+export type SaraCriancaDados = {
+  nome?: string
+  idade?: number
+  data_nascimento?: string
+  serie_desejada?: string
+  periodo?: string
+}
+
 export type SaraResposta = {
   resposta: string
   proxima_coluna_id: string | null
   razao_movimentacao: string | null
-  resumo_anotacao: string | null
-  agendar_visita_em: string | null
+  familia_dados: SaraFamiliaDados | null
+  crianca_dados: SaraCriancaDados | null
+  transbordo: boolean
+  motivo_transbordo: string | null
 }
 
 export async function gerarRespostaSara(
@@ -29,7 +46,7 @@ export async function gerarRespostaSara(
 ): Promise<SaraResposta> {
   const supabase = createServerAdminClient()
 
-  const { data: lead }: { data: any } = await supabase
+  const { data: lead } = await supabase
     .from('leads')
     .select('*, familia:familias(*), crianca:criancas(*)')
     .eq('id', leadId)
@@ -38,7 +55,6 @@ export async function gerarRespostaSara(
   if (!lead) throw new Error('Lead não encontrado')
 
   const { data: config } = await supabase.from('config_ia').select('*').eq('id', 1).single()
-
   const { data: kb } = await supabase
     .from('base_conhecimento')
     .select('categoria, pergunta, resposta')
@@ -53,66 +69,93 @@ export async function gerarRespostaSara(
 
   const historico = (msgs || []).reverse()
 
+  const ultimasMsgsIA = historico
+    .filter((m) => m.direcao === 'out_ia')
+    .slice(-3)
+    .map((m) => m.conteudo.toLowerCase())
+  const countVerificar = ultimasMsgsIA.filter(
+    (t) => t.includes('vou verificar') || t.includes('vou checar') || t.includes('equipe')
+  ).length
+
   const instrucaoMovimentacao =
     colunas && colunaAtual
       ? `
 MOVIMENTAÇÃO DE FUNIL:
-Você pode sugerir mover este lead para a próxima etapa respondendo "proxima_coluna_id".
 Coluna atual: "${colunaAtual.nome}" (ordem ${colunaAtual.ordem})
-Colunas disponíveis para avanço:
+Próximas opções:
 ${colunas
   .filter((c) => c.ordem > colunaAtual.ordem)
   .map((c) => `- id="${c.id}" nome="${c.nome}" ordem=${c.ordem}`)
   .join('\n')}
-
-Critérios para avançar coluna (SÓ avance uma etapa por vez, ordem atual + 1):
-- Capturados → Em Atendimento: família demonstrou interesse genuíno e está fazendo perguntas concretas
-- Em Atendimento → Visita Agendada: combinamos visita com data e horário confirmados
-- Visita Agendada → Visita Realizada: família confirmou que a visita aconteceu
-- Visita Realizada → Repescagem: família demonstrou dúvida ou pediu prazo
-- Qualquer → Perdidos: família disse que não vai matricular (razao_movimentacao é OBRIGATÓRIA)
-
-IMPORTANTE: "Matriculados" requer confirmação humana, NUNCA mova para lá.
-Se não houver motivo claro, retorne proxima_coluna_id como null.`
+Critérios (só avance UMA etapa, ordem atual+1):
+- Capturados→Em Atendimento: família fez pergunta concreta ou demonstrou interesse real
+- Em Atendimento→Visita Agendada: visita confirmada com data/hora
+- Visita Agendada→Visita Realizada: família confirmou que a visita ocorreu
+- Visita Realizada→Repescagem: família pediu prazo ou demonstrou dúvida
+- Qualquer→Perdidos: família recusou explicitamente (razao_movimentacao obrigatória)
+"Matriculados" NUNCA pode ser destino.`
       : ''
 
-  const systemPrompt = `${config?.system_prompt || 'Você é Sara, consultora de matrículas do Colégio Pequenos Guardiões, escola cristã de educação infantil em Fronteiras-PI.'}
+  const baseKnowledge = (kb || [])
+    .map((k) => `[${k.categoria}] P: ${k.pergunta}\nR: ${k.resposta}`)
+    .join('\n\n')
 
-INFORMAÇÕES DA ESCOLA (use quando relevante):
-${(kb || []).map((k) => `[${k.categoria}] ${k.pergunta}\nResposta: ${k.resposta}`).join('\n\n')}
+  const dadosFamilia = lead.familia
+  const dadosCrianca = lead.crianca
 
-DADOS QUE JÁ TEM SOBRE ESTA FAMÍLIA:
-- Responsável: ${lead.familia?.nome_responsavel || 'não informado'}
-- Telefone: ${lead.familia?.telefone}
-- Criança: ${lead.crianca?.nome || 'não informado'}${lead.crianca?.idade ? `, ${lead.crianca.idade} anos` : ''}
-- Série desejada: ${lead.crianca?.serie_desejada || 'não informado'}
-- Período desejado: ${lead.crianca?.periodo || 'não informado'}
-- Score atual: ${lead.score}
+  const systemPrompt = `${config?.system_prompt || 'Você é Sara, consultora de matrículas do Colégio Pequenos Guardiões.'}
+
+════════════════════════════════
+BASE DE CONHECIMENTO OFICIAL DA ESCOLA
+(USE APENAS ESTAS INFORMAÇÕES. NUNCA INVENTE DADOS NÃO LISTADOS ABAIXO.)
+════════════════════════════════
+${baseKnowledge}
+
+════════════════════════════════
+REGRA ANTI-ALUCINAÇÃO — CRÍTICA
+════════════════════════════════
+- Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"
+- NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
+- O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
+
+════════════════════════════════
+DADOS JÁ COLETADOS DESTA FAMÍLIA
+════════════════════════════════
+- Responsável: ${dadosFamilia?.nome_responsavel || 'não informado'}
+- Criança: ${dadosCrianca?.nome || 'não informado'}
+- Idade: ${dadosCrianca?.idade ? `${dadosCrianca.idade} anos` : 'não informado'}
+- Série desejada: ${dadosCrianca?.serie_desejada || 'não informado'}
+- Período desejado: ${dadosCrianca?.periodo || 'não informado'}
+
+DADOS OBRIGATÓRIOS FALTANDO (colete um por vez):
+${!dadosCrianca?.nome ? '- Nome da criança\n' : ''}${!dadosCrianca?.idade ? '- Idade da criança\n' : ''}${!dadosCrianca?.serie_desejada ? '- Série/turma desejada\n' : ''}${!dadosCrianca?.periodo ? '- Período desejado\n' : ''}
 ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 
-REGRAS:
-- Não repita perguntas já respondidas no histórico
-- Seja acolhedora, profissional e direta
-- Sempre proponha um próximo passo concreto
-- Mensagens curtas, no máximo 3 linhas
-- Se a família demonstrar interesse forte, ofereça visita presencial
+════════════════════════════════
+TRANSBORDO PARA HUMANO
+════════════════════════════════
+Marque transbordo=true se:
+1. Família pediu para falar com atendente/humano/coordenação
+2. Família fez reclamação grave
+3. Você usou "vou verificar com a equipe" 2+ vezes seguidas
+Gatilho automático: ${countVerificar >= 2 ? 'SIM — FORCE transbordo=true agora.' : 'não ativo'}
 
-FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem markdown, sem explicações:
+════════════════════════════════
+FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
+════════════════════════════════
 {
-  "resposta": "texto da mensagem para a família",
-  "proxima_coluna_id": "uuid da próxima coluna OU null",
-  "razao_movimentacao": "explicação breve OU null",
-  "resumo_anotacao": "1-2 frases resumindo o que ha de novo na conversa (dados coletados, visita agendada, objecao, decisao) OU null se nao houver fato novo relevante",
-  "agendar_visita_em": "data e hora ISO 8601 da visita com fuso -05:00 (ex: 2026-06-30T10:00:00-05:00), SOMENTE quando a familia confirmar dia E horario; senao null"
+  "resposta": "texto para a família",
+  "proxima_coluna_id": "uuid ou null",
+  "razao_movimentacao": "texto ou null",
+  "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
+  "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "integral" } ou null,
+  "transbordo": false,
+  "motivo_transbordo": "texto ou null"
 }`
-
-  const agoraFmt = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Rio_Branco' }).format(new Date())
-  const contextoAgendamento = `Data e hora atuais (fuso da escola, America/Rio_Branco): ${agoraFmt}. Use para interpretar datas relativas como amanha ou sexta. Quando a familia confirmar um dia E horario para a visita, preencha agendar_visita_em em ISO 8601 com fuso -05:00. So agende quando houver confirmacao concreta de dia e hora.`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'system', content: contextoAgendamento },
     ...historico.map((m) => ({
       role: (m.direcao === 'in' ? 'user' : 'assistant') as 'user' | 'assistant',
       content: m.conteudo,
@@ -121,9 +164,9 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
 
   const modelo = config?.modelo?.startsWith('gpt') ? config.modelo : 'gpt-4o'
 
-  const response = await getOpenAI().chat.completions.create({
+  const response = await openai.chat.completions.create({
     model: modelo,
-    max_tokens: 600,
+    max_tokens: 700,
     response_format: { type: 'json_object' },
     messages,
   })
@@ -136,16 +179,20 @@ FORMATO DE RESPOSTA OBRIGATÓRIO — responda SOMENTE com JSON válido, sem mark
       resposta: parsed.resposta || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: parsed.proxima_coluna_id ?? null,
       razao_movimentacao: parsed.razao_movimentacao ?? null,
-      resumo_anotacao: parsed.resumo_anotacao ?? null,
-      agendar_visita_em: parsed.agendar_visita_em ?? null,
+      familia_dados: parsed.familia_dados ?? null,
+      crianca_dados: parsed.crianca_dados ?? null,
+      transbordo: parsed.transbordo === true,
+      motivo_transbordo: parsed.motivo_transbordo ?? null,
     }
   } catch {
     return {
       resposta: raw || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: null,
       razao_movimentacao: null,
-      resumo_anotacao: null,
-      agendar_visita_em: null,
+      familia_dados: null,
+      crianca_dados: null,
+      transbordo: false,
+      motivo_transbordo: null,
     }
   }
 }
