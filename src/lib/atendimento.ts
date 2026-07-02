@@ -1,5 +1,7 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
+import { notificarGestor } from '@/lib/notificacoes'
+import { labelAcre } from '@/lib/disponibilidade'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -257,6 +259,11 @@ export async function processarMensagemRecebida(
               tipo: 'visita_agendada',
               descricao: `Sara agendou visita para ${dhIso}`,
             })
+            await notificarGestor(
+              supabase,
+              'visita',
+              `📅 *Visita agendada pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nQuando: ${labelAcre(dh)}`
+            )
           }
         }
       }
@@ -298,6 +305,14 @@ export async function processarMensagemRecebida(
             lead_id: lead.id, tipo: 'movimentacao',
             descricao: `Sara moveu de "${colunaAtual.nome}" para "${proximaColuna.nome}". Motivo: ${saraResult.razao_movimentacao || 'não informado'}`,
           })
+
+          if (proximaColuna.nome === 'Perdidos') {
+            await notificarGestor(
+              supabase,
+              'encerramento',
+              `🚫 *Atendimento encerrado — Perdido*\nFamília: ${familia.nome_responsavel || 'Família'}\nMotivo: ${saraResult.razao_movimentacao || 'não informado'}`
+            )
+          }
         }
       }
 

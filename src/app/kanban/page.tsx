@@ -92,6 +92,16 @@ export default function KanbanPage() {
       prev.map((l) => (l.id === leadId ? { ...l, coluna_id: newColunaId, entrou_coluna_em: agora } : l))
     )
     await supabase.from('leads').update({ coluna_id: newColunaId, entrou_coluna_em: agora }).eq('id', leadId)
+
+    // Desfecho do funil -> notifica o gestor (fire-and-forget)
+    const nomeCol = colunas.find((c) => c.id === newColunaId)?.nome || ''
+    if (/matric|perdid/i.test(nomeCol)) {
+      fetch('/api/notificar-desfecho', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: leadId, coluna: nomeCol }),
+      }).catch(() => {})
+    }
   }
 
   return (

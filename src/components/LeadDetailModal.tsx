@@ -96,6 +96,14 @@ export function LeadDetailModal({
   async function mudarColuna(id: string) {
     setColunaId(id)
     await supabase.from('leads').update({ coluna_id: id, entrou_coluna_em: new Date().toISOString() }).eq('id', lead.id)
+    const nomeCol = colunas.find((c) => c.id === id)?.nome || ''
+    if (/matric|perdid/i.test(nomeCol)) {
+      fetch('/api/notificar-desfecho', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: lead.id, coluna: nomeCol }),
+      }).catch(() => {})
+    }
   }
   async function mudarTemperatura(t: string) {
     if (t === 'auto') {

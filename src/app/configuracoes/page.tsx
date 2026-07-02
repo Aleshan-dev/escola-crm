@@ -4,7 +4,7 @@ import { Topbar } from '@/components/Topbar'
 import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
-  MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight, DollarSign,
+  MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight, DollarSign, Bell,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -16,6 +16,7 @@ const secoes: { nome: string; itens: Item[] }[] = [
     itens: [
       { titulo: 'Comportamento da Sara', descricao: 'Prompt, modelo e tom de voz da assistente.', href: '/configuracoes/sara', icon: Bot },
       { titulo: 'Base de conhecimento', descricao: 'Perguntas e respostas que a Sara usa.', href: '/configuracoes/sara', icon: BookOpen },
+      { titulo: 'Notificações do gestor', descricao: 'Número do gestor e eventos que avisam por WhatsApp.', href: '/configuracoes/notificacoes', icon: Bell },
     ],
   },
   {
