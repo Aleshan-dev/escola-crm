@@ -9,7 +9,7 @@ import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import type { Lead, Mensagem } from '@/lib/types'
-import { Bot, Send, Loader2, User } from 'lucide-react'
+import { Bot, Send, Loader2, User, RefreshCw } from 'lucide-react'
 
 function ChatPageInner() {
   const supabase = createClient()
@@ -19,6 +19,7 @@ function ChatPageInner() {
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [atualizando, setAtualizando] = useState(false)
   const msgsRef = useRef<HTMLDivElement>(null)
 
   async function loadLeads() {
@@ -43,11 +44,29 @@ function ChatPageInner() {
     if (data) setMensagens(data as Mensagem[])
   }
 
+  // Puxa do Evolution as mensagens que faltam (inclui as enviadas manualmente pelo celular)
+  async function atualizarConversa(lead?: Lead, silencioso = false) {
+    const alvo = lead || activeLead
+    const tel = alvo?.familia?.telefone
+    if (!alvo || !tel) return
+    if (!silencioso) setAtualizando(true)
+    try {
+      await fetch(`/api/admin/sync-chat?telefone=${encodeURIComponent(tel)}`, { credentials: 'include' })
+      await loadMensagens(alvo.id)
+    } catch {
+      // falha silenciosa: mantém o que já está na tela
+    } finally {
+      if (!silencioso) setAtualizando(false)
+    }
+  }
+
   useEffect(() => { loadLeads() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
   useEffect(() => {
     if (!activeLead) return
     loadMensagens(activeLead.id)
+    // Auto-sync ao abrir a conversa (silencioso)
+    atualizarConversa(activeLead, true)
 
     const ch = supabase
       .channel(`msg-${activeLead.id}`)
@@ -131,6 +150,15 @@ function ChatPageInner() {
                   <div className="text-sm font-medium">{activeLead.familia?.nome_responsavel}</div>
                   <div className="text-xs text-slate-500">{activeLead.familia?.telefone} · Score {activeLead.score}</div>
                 </div>
+                <button
+                  onClick={() => atualizarConversa()}
+                  disabled={atualizando}
+                  title="Puxar mensagens recentes do WhatsApp (inclui as enviadas pelo celular)"
+                  className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-600 border border-slate-200 rounded-lg px-2.5 py-1.5 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${atualizando ? 'animate-spin' : ''}`} />
+                  {atualizando ? 'Atualizando...' : 'Atualizar conversa'}
+                </button>
                 <label className="flex items-center gap-2 text-xs">
                   <Bot className="w-4 h-4 text-slate-500" />
                   <span className="text-slate-600">Sara IA</span>

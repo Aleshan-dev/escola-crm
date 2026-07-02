@@ -27,7 +27,11 @@ export async function middleware(request: NextRequest) {
 
   const url = request.nextUrl
   const isAuthRoute = url.pathname.startsWith('/login')
-  const isApiWebhook = url.pathname.startsWith('/api/webhook') || url.pathname.startsWith('/api/cron')
+  // Rotas de API que fazem a própria autenticação (webhooks, cron e admin protegido por CRON_SECRET/sessão)
+  const isApiWebhook =
+    url.pathname.startsWith('/api/webhook') ||
+    url.pathname.startsWith('/api/cron') ||
+    url.pathname.startsWith('/api/admin')
   const isPublic = url.pathname.startsWith('/privacy') || url.pathname.startsWith('/termos')
 
   // Webhooks do WhatsApp não precisam de auth

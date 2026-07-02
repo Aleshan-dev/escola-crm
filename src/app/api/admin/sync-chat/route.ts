@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerAdminClient } from '@/lib/supabase-server'
+import { createClient, createServerAdminClient } from '@/lib/supabase-server'
 
 // Puxa o histórico de um contato do Evolution e faz backfill na tabela `mensagens`.
 // Protegido pelo CRON_SECRET (Bearer ou ?secret=). Uso admin/pontual.
@@ -15,16 +15,24 @@ type EvoMsg = {
   pushName?: string
 }
 
-function autorizado(req: NextRequest): boolean {
+async function autorizado(req: NextRequest): Promise<boolean> {
+  // 1) CRON_SECRET (uso admin/cron via Bearer ou ?secret=)
   const secret = process.env.CRON_SECRET
-  if (!secret) return false
   const auth = req.headers.get('authorization')
   const q = req.nextUrl.searchParams.get('secret')
-  return auth === `Bearer ${secret}` || q === secret
+  if (secret && (auth === `Bearer ${secret}` || q === secret)) return true
+  // 2) Usuário logado no CRM (sessão do Supabase via cookie) — usado pelo botão da UI
+  try {
+    const sb = await createClient()
+    const { data } = await sb.auth.getUser()
+    return !!data.user
+  } catch {
+    return false
+  }
 }
 
 export async function GET(req: NextRequest) {
-  if (!autorizado(req)) {
+  if (!(await autorizado(req))) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
 
