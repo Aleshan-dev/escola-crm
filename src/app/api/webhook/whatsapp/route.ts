@@ -197,7 +197,6 @@ export async function POST(req: NextRequest) {
                   tipo: 'visita_agendada',
                   descricao: `Sara agendou visita para ${dhIso}`,
                 })
-                .catch(() => {})
             }
           }
         }
@@ -238,7 +237,7 @@ export async function POST(req: NextRequest) {
             await supabase.from('eventos_timeline').insert({
               lead_id: lead.id, tipo: 'movimentacao',
               descricao: `Sara moveu de "${colunaAtual.nome}" para "${proximaColuna.nome}". Motivo: ${saraResult.razao_movimentacao || 'não informado'}`,
-            }).catch(() => {})
+            })
           }
         }
 
