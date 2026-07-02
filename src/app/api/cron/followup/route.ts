@@ -13,6 +13,7 @@ import {
   type TriggerNome,
 } from '@/lib/followup-regras'
 import { MAX_ENVIOS_POR_EXECUCAO, jitterMs, sleep } from '@/lib/pacing'
+import { registrarAlerta } from '@/lib/alertas'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 export const maxDuration = 30
@@ -80,6 +81,7 @@ export async function GET(req: NextRequest) {
 
   if (error) {
     console.error('Erro ao buscar leads para follow-up:', error)
+    await registrarAlerta(supabase, 'cron/followup', error.message)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 

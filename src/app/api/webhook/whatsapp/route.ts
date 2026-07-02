@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { cleanWhatsappJid, evolutionSendText } from '@/lib/evolution'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
+import { registrarAlerta } from '@/lib/alertas'
 
 export async function GET() {
   return NextResponse.json({ ok: true, msg: 'Webhook escola-crm online' })
@@ -340,6 +341,7 @@ export async function POST(req: NextRequest) {
   } catch (e: unknown) {
     console.error('Webhook error:', e)
     const msg = e instanceof Error ? e.message : 'Erro desconhecido'
+    await registrarAlerta(supabase, 'webhook/whatsapp', msg)
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

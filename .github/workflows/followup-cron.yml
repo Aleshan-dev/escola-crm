@@ -3,11 +3,11 @@ name: Cron Sara (follow-up + Google sync)
 # ADR-004: agenda o follow-up automático da Sara (e o sync do Google Calendar)
 # via GitHub Actions, contornando o limite de cron diário do plano Vercel Hobby.
 # Requer o secret CRON_SECRET no repositório (mesmo valor que os endpoints validam).
+# Cada passo FALHA se a resposta não for HTTP 200 — o GitHub notifica o dono por e-mail.
 on:
   schedule:
-    # A cada 20 minutos. O horário comercial é filtrado dentro do endpoint (fuso de Acre).
     - cron: '*/20 * * * *'
-  workflow_dispatch: {} # permite disparo manual pela aba Actions
+  workflow_dispatch: {}
 
 jobs:
   cron:
@@ -15,12 +15,19 @@ jobs:
     steps:
       - name: Follow-up automático da Sara
         run: |
-          curl -sS -X GET "https://escola-crm.vercel.app/api/cron/followup" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            -w "\nfollowup -> HTTP %{http_code}\n"
+          code=$(curl -sS -o /tmp/followup.txt -w "%{http_code}" -X GET \
+            "https://escola-crm.vercel.app/api/cron/followup" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "followup -> HTTP $code"
+          cat /tmp/followup.txt || true
+          test "$code" = "200"
 
       - name: Sincronizar Google Calendar
+        if: always() # roda mesmo se o passo anterior falhar
         run: |
-          curl -sS -X GET "https://escola-crm.vercel.app/api/cron/google-sync" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            -w "\ngoogle-sync -> HTTP %{http_code}\n"
+          code=$(curl -sS -o /tmp/gsync.txt -w "%{http_code}" -X GET \
+            "https://escola-crm.vercel.app/api/cron/google-sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "google-sync -> HTTP $code"
+          cat /tmp/gsync.txt || true
+          test "$code" = "200"

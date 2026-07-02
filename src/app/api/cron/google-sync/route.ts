@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
+import { registrarAlerta } from '@/lib/alertas'
 
 const CLIENT_ID = '399470356836-r0kgrpnv5vutp8fsq263sa4kcafv9b4m.apps.googleusercontent.com'
 const TZ = 'America/Rio_Branco'
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
   }
 
   const supabase = createServerAdminClient()
+  try {
   const token = await getToken(supabase)
   if (!token) return NextResponse.json({ error: 'Google não conectado' }, { status: 400 })
 
@@ -92,4 +94,10 @@ export async function GET(req: NextRequest) {
 
   await supabase.from('integracao_google').update({ ultimo_sync: new Date().toISOString() }).eq('id', 1)
   return NextResponse.json({ ok: true, push, pull })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('google-sync falhou:', msg)
+    await registrarAlerta(supabase, 'cron/google-sync', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }
