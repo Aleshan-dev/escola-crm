@@ -200,6 +200,14 @@ export async function GET(req: NextRequest) {
       followup_num: count + 1,
     })
 
+    // Número inexistente no WhatsApp (Evolution responde exists:false):
+    // para de tentar esse lead para não retentar para sempre.
+    if (!enviado && /"exists"\s*:\s*false/.test(erro || '')) {
+      await supabase.from('leads').update({ followup_status: 'esgotado' }).eq('id', lead.id)
+      resultados.push({ lead: lead.id, trigger, enviado: false, skip: 'numero_inexistente' })
+      continue
+    }
+
     // Só conta a tentativa e avança o relógio se o envio deu certo (idempotência)
     if (enviado) {
       const novoCount = count + 1
