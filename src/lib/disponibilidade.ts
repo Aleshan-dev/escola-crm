@@ -1,7 +1,7 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
 
 // Rio Branco / Acre = UTC-5 o ano todo (não observa horário de verão).
-const ACRE_SHIFT_MS = -5 * 60 * 60 * 1000
+export const ACRE_SHIFT_MS = -5 * 60 * 60 * 1000
 const DIAS_PT = [
   'Domingo',
   'Segunda-feira',
@@ -17,7 +17,11 @@ export type SlotDisponivel = {
   label: string // rótulo em horário de Acre, ex: "quinta-feira, 02/07 às 09:00"
 }
 
-type HorarioVisita = { dia_semana: string; hora_inicio: string | null; hora_fim: string | null }
+export type HorarioVisita = {
+  dia_semana: string
+  hora_inicio: string | null
+  hora_fim: string | null
+}
 
 function parseHora(h: string): { hora: number; min: number } {
   const [hh, mm] = h.split(':')
@@ -25,12 +29,12 @@ function parseHora(h: string): { hora: number; min: number } {
 }
 
 // Componentes de "parede" em Acre -> instante UTC real.
-function acreWallToUtc(y: number, mo: number, d: number, h: number, mi: number): Date {
+export function acreWallToUtc(y: number, mo: number, d: number, h: number, mi: number): Date {
   return new Date(Date.UTC(y, mo, d, h, mi) - ACRE_SHIFT_MS)
 }
 
 // Instante UTC -> rótulo legível em horário de Acre.
-function labelAcre(utc: Date): string {
+export function labelAcre(utc: Date): string {
   const w = new Date(utc.getTime() + ACRE_SHIFT_MS) // lê a parede de Acre via getUTC*
   const diaSemana = DIAS_PT[w.getUTCDay()].toLowerCase()
   const dd = String(w.getUTCDate()).padStart(2, '0')
@@ -40,51 +44,38 @@ function labelAcre(utc: Date): string {
   return `${diaSemana}, ${dd}/${mm} às ${hh}:${min}`
 }
 
+export type OpcoesSlot = {
+  quantidade?: number
+  duracaoMin?: number
+  horizonteDias?: number
+  antecedenciaMin?: number
+}
+
 /**
- * Calcula os próximos horários de visita realmente livres, cruzando as faixas
- * configuradas em `horarios_visita` com as `tarefas` já ocupadas (que incluem
- * os eventos do Google Calendar sincronizados). Retorna, por padrão, 2 opções.
+ * Lógica PURA (sem banco, testável): dado o cadastro de horários, os instantes
+ * já ocupados e o "agora", devolve os próximos slots de visita livres.
  */
-export async function calcularSlotsDisponiveis(
-  supabase: ReturnType<typeof createServerAdminClient>,
-  opts?: {
-    quantidade?: number
-    duracaoMin?: number
-    horizonteDias?: number
-    antecedenciaMin?: number
-  }
-): Promise<SlotDisponivel[]> {
+export function gerarSlots(
+  horarios: HorarioVisita[],
+  ocupadosMs: number[],
+  agoraMs: number,
+  opts?: OpcoesSlot
+): SlotDisponivel[] {
   const quantidade = opts?.quantidade ?? 2
   const duracaoMin = opts?.duracaoMin ?? 60
   const horizonteDias = opts?.horizonteDias ?? 21
-  const antecedenciaMin = opts?.antecedenciaMin ?? 120 // 2h de antecedência mínima
+  const antecedenciaMin = opts?.antecedenciaMin ?? 120
 
-  const { data: horariosRaw } = await supabase
-    .from('horarios_visita')
-    .select('dia_semana, hora_inicio, hora_fim')
-    .eq('ativo', true)
-  const horarios = (horariosRaw as HorarioVisita[] | null) || []
   if (horarios.length === 0) return []
 
-  const agora = Date.now()
-  const limiteInf = agora + antecedenciaMin * 60 * 1000
+  const limiteInf = agoraMs + antecedenciaMin * 60 * 1000
   const durMs = duracaoMin * 60 * 1000
 
-  // Tarefas ocupadas (visitas do CRM + eventos do Google já sincronizados).
-  const { data: tarefasRaw } = await supabase
-    .from('tarefas')
-    .select('data_hora, status')
-    .gte('data_hora', new Date(agora - durMs).toISOString())
-    .neq('status', 'cancelada')
-  const ocupados = ((tarefasRaw as { data_hora: string; status: string }[] | null) || []).map((t) =>
-    new Date(t.data_hora).getTime()
-  )
-
   const conflita = (inicioMs: number): boolean =>
-    ocupados.some((o) => o < inicioMs + durMs && o + durMs > inicioMs)
+    ocupadosMs.some((o) => o < inicioMs + durMs && o + durMs > inicioMs)
 
   const slots: SlotDisponivel[] = []
-  const hojeAcre = new Date(agora + ACRE_SHIFT_MS) // parede de Acre
+  const hojeAcre = new Date(agoraMs + ACRE_SHIFT_MS) // parede de Acre
 
   for (let i = 0; i < horizonteDias && slots.length < quantidade; i++) {
     const base = new Date(
@@ -119,4 +110,34 @@ export async function calcularSlotsDisponiveis(
   }
 
   return slots
+}
+
+/**
+ * Wrapper com banco: busca `horarios_visita` (ativos) e as `tarefas` ocupadas
+ * (inclui eventos do Google já sincronizados) e delega o cálculo à `gerarSlots`.
+ */
+export async function calcularSlotsDisponiveis(
+  supabase: ReturnType<typeof createServerAdminClient>,
+  opts?: OpcoesSlot
+): Promise<SlotDisponivel[]> {
+  const duracaoMin = opts?.duracaoMin ?? 60
+
+  const { data: horariosRaw } = await supabase
+    .from('horarios_visita')
+    .select('dia_semana, hora_inicio, hora_fim')
+    .eq('ativo', true)
+  const horarios = (horariosRaw as HorarioVisita[] | null) || []
+  if (horarios.length === 0) return []
+
+  const agora = Date.now()
+  const { data: tarefasRaw } = await supabase
+    .from('tarefas')
+    .select('data_hora, status')
+    .gte('data_hora', new Date(agora - duracaoMin * 60 * 1000).toISOString())
+    .neq('status', 'cancelada')
+  const ocupados = ((tarefasRaw as { data_hora: string; status: string }[] | null) || []).map((t) =>
+    new Date(t.data_hora).getTime()
+  )
+
+  return gerarSlots(horarios, ocupados, agora, opts)
 }
