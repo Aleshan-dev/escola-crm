@@ -15,7 +15,6 @@ type Serie = { id: string; nome: string }
 type Tarefa = { id: string; titulo: string; tipo: string | null; data_hora: string; concluida: boolean }
 type Anotacao = { id: string; conteudo: string; criado_em: string }
 
-const PERIODOS = ['matutino', 'vespertino', 'integral']
 const TIPOS = ['geral', 'visita', 'ligacao', 'followup', 'reuniao']
 const selCls = 'rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-blue-400 bg-white'
 const inputCls = 'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400'
@@ -38,6 +37,7 @@ export function LeadDetailModal({
   const [periodo, setPeriodo] = useState(lead.crianca?.periodo || '')
 
   const [seriesList, setSeriesList] = useState<Serie[]>([])
+  const [turnosList, setTurnosList] = useState<{ nome: string }[]>([])
   const [tarefas, setTarefas] = useState<Tarefa[]>([])
   const [anotacoes, setAnotacoes] = useState<Anotacao[]>([])
 
@@ -83,6 +83,9 @@ export function LeadDetailModal({
     let ativo = true
     supabase.from('series').select('id, nome').eq('ativa', true).order('ordem').then(({ data }) => {
       if (ativo && data) setSeriesList(data as unknown as Serie[])
+    })
+    supabase.from('turnos').select('nome').eq('ativo', true).order('ordem').then(({ data }) => {
+      if (ativo && data) setTurnosList(data as unknown as { nome: string }[])
     })
     carregarAnotacoes()
     carregarTarefas()
@@ -184,7 +187,8 @@ export function LeadDetailModal({
                   <span className="mb-1 block text-xs font-medium text-slate-500">Período</span>
                   <select value={periodo} onChange={(e) => mudarPeriodo(e.target.value)} className={`${selCls} w-full`}>
                     <option value="">—</option>
-                    {PERIODOS.map((p) => <option key={p} value={p}>{p}</option>)}
+                    {turnosList.map((t) => <option key={t.nome} value={t.nome}>{t.nome}</option>)}
+                    {periodo && !turnosList.some((t) => t.nome === periodo) && <option value={periodo}>{periodo}</option>}
                   </select>
                 </label>
               </>
