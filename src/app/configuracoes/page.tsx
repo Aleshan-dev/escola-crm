@@ -4,7 +4,7 @@ import { Topbar } from '@/components/Topbar'
 import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
-  MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight,
+  MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight, DollarSign,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -33,6 +33,7 @@ const secoes: { nome: string; itens: Item[] }[] = [
       { titulo: 'Horários de visita', descricao: 'Horários disponíveis para visitas.', href: '/configuracoes/horarios-visita', icon: CalendarCheck },
       { titulo: 'Motivos de perda', descricao: 'Padronize os motivos de perda.', href: '/configuracoes/motivos', icon: XCircle },
       { titulo: 'Origem dos interessados', descricao: 'Canais de entrada de leads.', href: '/configuracoes/origens', icon: Globe },
+      { titulo: 'Investimento por canal', descricao: 'Lance o gasto por canal para calcular o CAC.', href: '/configuracoes/investimento', icon: DollarSign },
     ],
   },
   {

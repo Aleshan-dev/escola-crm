@@ -5,8 +5,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import { Loader2, LineChart, ChevronLeft, ChevronRight, ArrowRight } from 'lucide-react'
+import Link from 'next/link'
 
 type Row = { nome: string; qtd: number }
+
+function brl(v: number) {
+  return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
 
 function inicioPeriodo(p: string): number {
   const d = new Date(); d.setHours(0, 0, 0, 0)
@@ -31,6 +36,7 @@ export default function InicioPage() {
   const [dim, setDim] = useState<'serie' | 'origem' | 'dono'>('serie')
   const [periodo, setPeriodo] = useState('mes')
   const [fstats, setFstats] = useState<any>(null)
+  const [invs, setInvs] = useState<any[]>([])
 
   useEffect(() => {
     (async () => {
@@ -40,7 +46,7 @@ export default function InicioPage() {
       const [fr, cr, lr, tr, mr, ur] = await Promise.all([
         supabase.from('funis').select('id, nome').order('criado_em'),
         supabase.from('colunas').select('id, nome, ordem, funil_id').order('ordem'),
-        supabase.from('leads').select('*, crianca:criancas(serie_desejada)').eq('arquivado', false),
+        supabase.from('leads').select('*, crianca:criancas(serie_desejada), familia:familias(canal)').eq('arquivado', false),
         supabase.from('tarefas').select('id, criado_em, lead_id, responsavel_id'),
         supabase.from('metas_crescimento').select('nome, valor_meta'),
         supabase.from('usuarios').select('id, nome'),
@@ -54,6 +60,8 @@ export default function InicioPage() {
       setUsuarios((ur.data as any[]) || [])
       const { data: fs2 } = await supabase.from('v_followup_stats').select('*').maybeSingle()
       setFstats(fs2 || null)
+      const { data: iv } = await supabase.from('investimento_canal').select('canal, periodo, valor')
+      setInvs((iv as any[]) || [])
       setLoading(false)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -103,13 +111,33 @@ export default function InicioPage() {
     const taxaMatricula = totalLeads > 0 ? (matriculados / totalLeads) * 100 : 0
     const maxFunil = Math.max(1, ...funil.map((c) => c.qtd))
 
+    // Aquisição por canal (mês atual) + CAC
+    const periodoAtual = (() => { const x = new Date(); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}` })()
+    const canalMap: Record<string, { canal: string; leads: number; matriculas: number; investimento: number }> = {}
+    const canalDe = (l: any) => l.familia?.canal || 'organico'
+    for (const l of ls) {
+      const c = canalDe(l)
+      if (!canalMap[c]) canalMap[c] = { canal: c, leads: 0, matriculas: 0, investimento: 0 }
+      if (new Date(l.criado_em).getTime() >= iniMes) canalMap[c].leads++
+      if (colMatric && l.coluna_id === colMatric.id && new Date(l.entrou_coluna_em || l.criado_em).getTime() >= iniMes) canalMap[c].matriculas++
+    }
+    for (const inv of invs) {
+      if (inv.periodo === periodoAtual) {
+        const c = inv.canal
+        if (!canalMap[c]) canalMap[c] = { canal: c, leads: 0, matriculas: 0, investimento: 0 }
+        canalMap[c].investimento += Number(inv.valor) || 0
+      }
+    }
+    const aquisicao = Object.values(canalMap).sort((a, b) => b.leads - a.leads)
+
     return {
       contatosTotal: ls.length, contatosMes, metaContatos: somaMeta(/contato/i),
       matriculasTotal: matricLeads.length, matriculasMes, metaMatriculas: somaMeta(/matr[ií]c/i),
       tabela, totalAlunos, operadores,
       funil, totalLeads, matriculados, perdidos, visitaAgendada, visitaRealizada, taxaMatricula, maxFunil,
+      aquisicao,
     }
-  }, [colunas, leads, tarefas, metas, usuarios, funilSel, dim, periodo, nomeUser])
+  }, [colunas, leads, tarefas, metas, usuarios, funilSel, dim, periodo, nomeUser, invs])
 
   function previsao(r: number) {
     const h = new Date(); const dia = h.getDate()
@@ -173,6 +201,44 @@ export default function InicioPage() {
                     <FollowStat label="Taxa de resposta" v={fstats.leads_alcancados > 0 ? `${Math.round((fstats.leads_responderam / fstats.leads_alcancados) * 100)}%` : '—'} />
                   </div>
                   {fstats.falhas > 0 && <div className="mt-2 text-center text-xs text-amber-700">{fstats.falhas} envio(s) falharam</div>}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <div className="mb-1 flex items-center justify-between">
+                <h2 className="font-bold text-slate-900">Aquisição por canal (mês atual)</h2>
+                <Link href="/configuracoes/investimento" className="text-xs font-medium text-blue-600 hover:underline">Lançar investimento</Link>
+              </div>
+              <p className="mb-4 text-xs text-slate-500">CAC = investimento ÷ matrículas do canal no mês.</p>
+              {d.aquisicao.length === 0 ? (
+                <p className="text-sm text-slate-400">Sem leads ainda neste mês.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase text-slate-400">
+                        <th className="py-2 pr-3">Canal</th>
+                        <th className="py-2 px-3 text-right">Leads</th>
+                        <th className="py-2 px-3 text-right">Matrículas</th>
+                        <th className="py-2 px-3 text-right">Investimento</th>
+                        <th className="py-2 px-3 text-right">Custo/lead</th>
+                        <th className="py-2 pl-3 text-right">CAC</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {d.aquisicao.map((a) => (
+                        <tr key={a.canal}>
+                          <td className="py-2 pr-3 font-medium text-slate-700">{a.canal}</td>
+                          <td className="py-2 px-3 text-right text-slate-600">{a.leads}</td>
+                          <td className="py-2 px-3 text-right text-slate-600">{a.matriculas}</td>
+                          <td className="py-2 px-3 text-right text-slate-600">{a.investimento > 0 ? brl(a.investimento) : '—'}</td>
+                          <td className="py-2 px-3 text-right text-slate-600">{a.leads > 0 && a.investimento > 0 ? brl(a.investimento / a.leads) : '—'}</td>
+                          <td className="py-2 pl-3 text-right font-semibold text-slate-900">{a.matriculas > 0 && a.investimento > 0 ? brl(a.investimento / a.matriculas) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

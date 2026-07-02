@@ -47,6 +47,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, fromMe: status })
     }
 
+    // Atribuição: mensagem vinda de anúncio click-to-WhatsApp traz o "externalAdReply"
+    const ad =
+      data?.message?.extendedTextMessage?.contextInfo?.externalAdReply ||
+      data?.contextInfo?.externalAdReply ||
+      null
+
     await processarMensagemRecebida(supabase, {
       telefone,
       conteudo,
@@ -55,6 +61,9 @@ export async function POST(req: NextRequest) {
       origem: 'whatsapp',
       tag: 'whatsapp',
       enviarTexto: enviarEvolution,
+      canal: ad ? 'meta-ads' : 'organico',
+      campanha: ad ? ad.title || ad.sourceId || null : null,
+      referral: ad || null,
     })
 
     return NextResponse.json({ ok: true })

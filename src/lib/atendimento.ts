@@ -79,9 +79,12 @@ export async function processarMensagemRecebida(
     origem: string // familias.origem
     tag: string // tag inicial do lead
     enviarTexto: EnviarTexto
+    canal?: string // 'meta-ads' | 'organico' ... (atribuição first-touch)
+    campanha?: string | null
+    referral?: unknown // payload bruto do anúncio, para auditoria
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral } = params
 
   let { data: familia } = await supabase
     .from('familias')
@@ -92,7 +95,14 @@ export async function processarMensagemRecebida(
   if (!familia) {
     const ins = await supabase
       .from('familias')
-      .insert({ nome_responsavel: pushName, telefone, origem })
+      .insert({
+        nome_responsavel: pushName,
+        telefone,
+        origem,
+        canal: canal || 'organico',
+        campanha: campanha || null,
+        referral: (referral as object | null) ?? null,
+      })
       .select('id, nome_responsavel')
       .single()
     familia = ins.data

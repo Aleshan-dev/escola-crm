@@ -48,6 +48,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Atribuição: a API oficial traz o objeto "referral" em mensagens de anúncio CTWA
+    const ref = msg.referral || null
+
     await processarMensagemRecebida(supabase, {
       telefone,
       conteudo,
@@ -56,6 +59,9 @@ export async function POST(req: NextRequest) {
       origem: 'whatsapp-oficial',
       tag: 'whatsapp-oficial',
       enviarTexto: enviarCloud,
+      canal: ref ? 'meta-ads' : 'organico',
+      campanha: ref ? ref.headline || ref.source_id || null : null,
+      referral: ref || null,
     })
 
     return NextResponse.json({ ok: true })
