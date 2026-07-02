@@ -66,6 +66,18 @@ export async function gerarRespostaSara(
     .select('categoria, pergunta, resposta')
     .eq('ativa', true)
 
+  const { data: series } = await supabase
+    .from('series')
+    .select('nome, faixa_etaria')
+    .eq('ativa', true)
+    .order('ordem')
+
+  const { data: turnos } = await supabase
+    .from('turnos')
+    .select('nome, hora_inicio, hora_fim')
+    .eq('ativo', true)
+    .order('ordem')
+
   const { data: msgs } = await supabase
     .from('mensagens')
     .select('direcao, conteudo, criado_em')
@@ -106,6 +118,31 @@ Critérios (só avance UMA etapa, ordem atual+1):
     .map((k) => `[${k.categoria}] P: ${k.pergunta}\nR: ${k.resposta}`)
     .join('\n\n')
 
+  const listaSeries = (series || [])
+    .map((s) => `- ${s.nome}${s.faixa_etaria ? ` (${s.faixa_etaria})` : ''}`)
+    .join('\n')
+  const listaTurnos = (turnos || [])
+    .map((t) => {
+      const ini = t.hora_inicio ? String(t.hora_inicio).slice(0, 5) : ''
+      const fim = t.hora_fim ? String(t.hora_fim).slice(0, 5) : ''
+      const faixa = ini || fim ? ` (${ini}–${fim})` : ''
+      return `- ${t.nome}${faixa}`
+    })
+    .join('\n')
+
+  const blocoConfig = `
+════════════════════════════════
+TURMAS E TURNOS OFICIAIS (fonte da verdade — use SOMENTE estes, nunca invente)
+════════════════════════════════
+TURMAS/SÉRIES disponíveis:
+${listaSeries || '- (nenhuma turma configurada)'}
+TURNOS/PERÍODOS disponíveis:
+${listaTurnos || '- (nenhum turno configurado)'}
+- Use a IDADE da criança para indicar a turma correta pela faixa etária acima.
+- Em "crianca_dados.serie_desejada" preencha com o NOME EXATO de uma turma da lista.
+- Em "crianca_dados.periodo" preencha com o NOME EXATO de um turno da lista.
+- Se a idade não se encaixar em nenhuma turma, diga que vai confirmar com a equipe (não invente turma).`
+
   // Horários de visita realmente livres (cruza horarios_visita x tarefas/Google)
   const slots = await calcularSlotsDisponiveis(supabase, { quantidade: 2 })
   const blocoAgenda =
@@ -142,6 +179,7 @@ REGRA ANTI-ALUCINAÇÃO — CRÍTICA
 - Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
 - O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
+${blocoConfig}
 
 ════════════════════════════════
 DADOS JÁ COLETADOS DESTA FAMÍLIA
@@ -175,7 +213,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "proxima_coluna_id": "uuid ou null",
   "razao_movimentacao": "texto ou null",
   "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
-  "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "integral" } ou null,
+  "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral" } ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
   "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null
