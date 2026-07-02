@@ -85,6 +85,13 @@ export async function gerarRespostaSara(
     .order('criado_em', { ascending: false })
     .limit(20)
 
+  const { data: anotacoes } = await supabase
+    .from('anotacoes')
+    .select('conteudo, criado_em')
+    .eq('lead_id', leadId)
+    .order('criado_em', { ascending: false })
+    .limit(10)
+
   const historico = (msgs || []).reverse()
 
   const ultimasMsgsIA = historico
@@ -143,6 +150,21 @@ ${listaTurnos || '- (nenhum turno configurado)'}
 - Em "crianca_dados.periodo" preencha com o NOME EXATO de um turno da lista.
 - Se a idade não se encaixar em nenhuma turma, diga que vai confirmar com a equipe (não invente turma).`
 
+  const listaAnotacoes = (anotacoes || [])
+    .map((a) => {
+      const d = a.criado_em ? new Date(a.criado_em).toLocaleDateString('pt-BR') : ''
+      return `- (${d}) ${a.conteudo}`
+    })
+    .join('\n')
+  const blocoAnotacoes = listaAnotacoes
+    ? `
+════════════════════════════════
+ANOTAÇÕES INTERNAS DA EQUIPE SOBRE ESTE LEAD
+(contexto interno para você se orientar — NUNCA repita o texto das anotações literalmente à família; use só para personalizar sua abordagem)
+════════════════════════════════
+${listaAnotacoes}`
+    : ''
+
   // Horários de visita realmente livres (cruza horarios_visita x tarefas/Google)
   const slots = await calcularSlotsDisponiveis(supabase, { quantidade: 2 })
   const blocoAgenda =
@@ -195,6 +217,7 @@ ${!dadosCrianca?.nome ? '- Nome da criança\n' : ''}${!dadosCrianca?.idade ? '- 
 ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
+${blocoAnotacoes}
 
 ════════════════════════════════
 TRANSBORDO PARA HUMANO
