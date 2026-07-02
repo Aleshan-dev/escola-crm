@@ -19,8 +19,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ignored: event })
     }
 
-    if (data?.key?.fromMe === true) return NextResponse.json({ ignored: 'fromMe' })
-
     const jid: string = data?.key?.remoteJid || ''
     if (!jid || jid.includes('@g.us')) return NextResponse.json({ ignored: 'group ou sem jid' })
 
@@ -33,6 +31,58 @@ export async function POST(req: NextRequest) {
 
     const pushName: string = data?.pushName || 'Família'
     const wid: string = data?.key?.id || ''
+
+    // ADR-005: mensagem enviada pelo próprio número (fromMe) pode ser a Sara (via API,
+    // já registrada) ou uma resposta MANUAL digitada no celular pela equipe.
+    if (data?.key?.fromMe === true) {
+      // Dedupe: se já existe (foi a Sara que enviou pela API), ignora.
+      if (wid) {
+        const { data: jaExiste } = await supabase
+          .from('mensagens')
+          .select('id')
+          .eq('whatsapp_message_id', wid)
+          .maybeSingle()
+        if (jaExiste) return NextResponse.json({ ignored: 'fromMe_sara' })
+      }
+
+      // Resposta manual pelo celular: registra como out_humano e pausa a Sara (humano assumiu).
+      const { data: famManual } = await supabase
+        .from('familias')
+        .select('id')
+        .eq('telefone', telefone)
+        .maybeSingle()
+      if (!famManual) return NextResponse.json({ ignored: 'fromMe_sem_familia' })
+
+      const { data: leadManual } = await supabase
+        .from('leads')
+        .select('id, ia_ativa')
+        .eq('familia_id', famManual.id)
+        .order('criado_em', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (!leadManual) return NextResponse.json({ ignored: 'fromMe_sem_lead' })
+
+      await supabase.from('mensagens').insert({
+        lead_id: leadManual.id,
+        direcao: 'out_humano',
+        conteudo,
+        whatsapp_message_id: wid || null,
+      })
+
+      // Handoff: humano respondeu manualmente -> pausa a Sara nesse lead
+      if (leadManual.ia_ativa) {
+        await supabase.from('leads').update({ ia_ativa: false }).eq('id', leadManual.id)
+        await supabase
+          .from('eventos_timeline')
+          .insert({
+            lead_id: leadManual.id,
+            tipo: 'status_ia',
+            descricao: 'Sara pausada: atendente respondeu manualmente pelo WhatsApp',
+          })
+      }
+
+      return NextResponse.json({ ok: true, fromMe: 'registrado_out_humano' })
+    }
 
     let { data: familia } = await supabase
       .from('familias')
