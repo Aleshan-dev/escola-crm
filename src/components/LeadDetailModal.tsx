@@ -73,8 +73,16 @@ export function LeadDetailModal({
     await supabase.from('leads').update({ coluna_id: id, entrou_coluna_em: new Date().toISOString() }).eq('id', lead.id)
   }
   async function mudarTemperatura(t: string) {
+    if (t === 'auto') {
+      // Volta ao cálculo automático: remove override e recalcula no banco
+      await supabase.from('leads').update({ temperatura_manual: false }).eq('id', lead.id)
+      const { data } = await supabase.from('leads').select('temperatura').eq('id', lead.id).single()
+      if (data?.temperatura) setTemperatura(data.temperatura as string)
+      return
+    }
     setTemperatura(t)
-    await supabase.from('leads').update({ temperatura: t }).eq('id', lead.id)
+    // Ajuste manual: marca override para o cálculo automático não sobrescrever
+    await supabase.from('leads').update({ temperatura: t, temperatura_manual: true }).eq('id', lead.id)
   }
   async function mudarSerie(s: string) {
     setSerie(s)
@@ -134,6 +142,7 @@ export function LeadDetailModal({
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-500">Temperatura</span>
               <select value={temperatura} onChange={(e) => mudarTemperatura(e.target.value)} className={`${selCls} w-full`}>
+                <option value="auto">Automático (recalcular)</option>
                 <option value="frio">Frio</option>
                 <option value="morno">Morno</option>
                 <option value="quente">Quente</option>

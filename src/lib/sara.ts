@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
+import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
@@ -36,6 +37,7 @@ export type SaraResposta = {
   crianca_dados: SaraCriancaDados | null
   transbordo: boolean
   motivo_transbordo: string | null
+  agendar_visita: { data_hora: string } | null
 }
 
 export async function gerarRespostaSara(
@@ -100,6 +102,25 @@ Critérios (só avance UMA etapa, ordem atual+1):
     .map((k) => `[${k.categoria}] P: ${k.pergunta}\nR: ${k.resposta}`)
     .join('\n\n')
 
+  // Horários de visita realmente livres (cruza horarios_visita x tarefas/Google)
+  const slots = await calcularSlotsDisponiveis(supabase, { quantidade: 2 })
+  const blocoAgenda =
+    slots.length > 0
+      ? `
+════════════════════════════════
+AGENDAMENTO DE VISITA — HORÁRIOS REAIS DISPONÍVEIS
+════════════════════════════════
+Quando a família quiser visitar, ofereça SEMPRE e SOMENTE estas duas opções (NUNCA invente outros horários):
+${slots.map((s, i) => `Opção ${i + 1}: ${s.label}  [data_hora=${s.data_hora}]`).join('\n')}
+- Ao apresentar, use apenas o texto amigável (ex.: "${slots[0].label}"), sem mostrar o campo data_hora.
+- Quando a família ESCOLHER/CONFIRMAR uma das opções, preencha "agendar_visita" com o data_hora EXATO (ISO) da opção escolhida e confirme a visita com alegria.
+- Se nenhuma das duas servir, diga que vai verificar outras datas com a equipe (não invente horários).`
+      : `
+════════════════════════════════
+AGENDAMENTO DE VISITA
+════════════════════════════════
+Não há horários de visita disponíveis no momento. Se a família quiser agendar, diga que vai confirmar as datas com a equipe (não invente horários).`
+
   const dadosFamilia = lead.familia
   const dadosCrianca = lead.crianca
 
@@ -131,6 +152,7 @@ DADOS OBRIGATÓRIOS FALTANDO (colete um por vez):
 ${!dadosCrianca?.nome ? '- Nome da criança\n' : ''}${!dadosCrianca?.idade ? '- Idade da criança\n' : ''}${!dadosCrianca?.serie_desejada ? '- Série/turma desejada\n' : ''}${!dadosCrianca?.periodo ? '- Período desejado\n' : ''}
 ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
+${blocoAgenda}
 
 ════════════════════════════════
 TRANSBORDO PARA HUMANO
@@ -151,7 +173,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
   "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "integral" } ou null,
   "transbordo": false,
-  "motivo_transbordo": "texto ou null"
+  "motivo_transbordo": "texto ou null",
+  "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -183,6 +206,10 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
       crianca_dados: parsed.crianca_dados ?? null,
       transbordo: parsed.transbordo === true,
       motivo_transbordo: parsed.motivo_transbordo ?? null,
+      agendar_visita:
+        parsed.agendar_visita && parsed.agendar_visita.data_hora
+          ? { data_hora: parsed.agendar_visita.data_hora }
+          : null,
     }
   } catch {
     return {
@@ -193,6 +220,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
       crianca_dados: null,
       transbordo: false,
       motivo_transbordo: null,
+      agendar_visita: null,
     }
   }
 }

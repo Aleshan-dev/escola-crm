@@ -81,13 +81,21 @@ export async function POST(req: NextRequest) {
         await supabase.from('mensagens').insert({ lead_id: leadId, direcao: 'out_ia', conteudo: partes[i], whatsapp_message_id: sent?.messages?.[0]?.id || null, status: statusEnvio, erro_envio: erroEnvio })
       }
 
-      if (saraResult.resumo_anotacao && saraResult.resumo_anotacao.trim()) {
-        await supabase.from('anotacoes').insert({ lead_id: leadId, conteudo: saraResult.resumo_anotacao.trim() })
-      }
-      if (saraResult.agendar_visita_em) {
-        const dataVisita = new Date(saraResult.agendar_visita_em)
+      if (saraResult.agendar_visita?.data_hora) {
+        const dataVisita = new Date(saraResult.agendar_visita.data_hora)
         if (!isNaN(dataVisita.getTime())) {
-          await supabase.from('tarefas').insert({ lead_id: leadId, titulo: `Visita — ${familiaNome}`, tipo: 'visita', data_hora: dataVisita.toISOString() })
+          const dhIso = dataVisita.toISOString()
+          const { data: jaTem } = await supabase
+            .from('tarefas')
+            .select('id')
+            .eq('lead_id', leadId)
+            .eq('tipo', 'visita')
+            .eq('data_hora', dhIso)
+            .maybeSingle()
+          if (!jaTem) {
+            await supabase.from('tarefas').insert({ lead_id: leadId, titulo: `Visita — ${familiaNome}`, tipo: 'visita', data_hora: dhIso })
+            await supabase.from('leads').update({ data_proxima_acao: dhIso, proxima_acao: 'Visita agendada' }).eq('id', leadId)
+          }
         }
       }
       if (saraResult.proxima_coluna_id && podeMover && cols.some((c) => c.id === saraResult.proxima_coluna_id)) {

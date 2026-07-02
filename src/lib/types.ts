@@ -23,6 +23,7 @@ export type Lead = {
   responsavel_id: string | null
   score: number
   temperatura: 'frio' | 'morno' | 'quente'
+  temperatura_manual?: boolean
   ia_ativa: boolean
   tags: string[]
   motivo_perda: string | null

@@ -164,6 +164,44 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Agendamento de visita confirmado pela Sara
+        if (saraResult.agendar_visita?.data_hora) {
+          const dh = new Date(saraResult.agendar_visita.data_hora)
+          if (!isNaN(dh.getTime())) {
+            const dhIso = dh.toISOString()
+            const { data: jaTem } = await supabase
+              .from('tarefas')
+              .select('id')
+              .eq('lead_id', lead.id)
+              .eq('tipo', 'visita')
+              .eq('data_hora', dhIso)
+              .maybeSingle()
+
+            if (!jaTem) {
+              await supabase.from('tarefas').insert({
+                lead_id: lead.id,
+                titulo: `Visita — ${familia.nome_responsavel || 'Família'}`,
+                tipo: 'visita',
+                data_hora: dhIso,
+              })
+
+              await supabase
+                .from('leads')
+                .update({ data_proxima_acao: dhIso, proxima_acao: 'Visita agendada' })
+                .eq('id', lead.id)
+
+              await supabase
+                .from('eventos_timeline')
+                .insert({
+                  lead_id: lead.id,
+                  tipo: 'visita_agendada',
+                  descricao: `Sara agendou visita para ${dhIso}`,
+                })
+                .catch(() => {})
+            }
+          }
+        }
+
         // Guard-rails movimentação
         if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && todasColunas && colunaAtual) {
           const proximaColuna = todasColunas.find((c) => c.id === saraResult.proxima_coluna_id)
