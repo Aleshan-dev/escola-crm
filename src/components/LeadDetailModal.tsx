@@ -46,6 +46,9 @@ export function LeadDetailModal({
   const [tData, setTData] = useState('')
   const [tErro, setTErro] = useState<string | null>(null)
 
+  const [novaAnotacao, setNovaAnotacao] = useState('')
+  const [salvandoAnot, setSalvandoAnot] = useState(false)
+
   async function carregarTarefas() {
     const { data } = await supabase
       .from('tarefas')
@@ -55,14 +58,33 @@ export function LeadDetailModal({
     setTarefas((data as unknown as Tarefa[]) || [])
   }
 
+  async function carregarAnotacoes() {
+    const { data } = await supabase
+      .from('anotacoes')
+      .select('id, conteudo, criado_em')
+      .eq('lead_id', lead.id)
+      .order('criado_em', { ascending: false })
+    setAnotacoes((data as unknown as Anotacao[]) || [])
+  }
+
+  async function addAnotacao() {
+    const texto = novaAnotacao.trim()
+    if (!texto || salvandoAnot) return
+    setSalvandoAnot(true)
+    const { error } = await supabase.from('anotacoes').insert({ lead_id: lead.id, conteudo: texto })
+    setSalvandoAnot(false)
+    if (!error) {
+      setNovaAnotacao('')
+      carregarAnotacoes()
+    }
+  }
+
   useEffect(() => {
     let ativo = true
     supabase.from('series').select('id, nome').eq('ativa', true).order('ordem').then(({ data }) => {
       if (ativo && data) setSeriesList(data as unknown as Serie[])
     })
-    supabase.from('anotacoes').select('id, conteudo, criado_em').eq('lead_id', lead.id).order('criado_em', { ascending: false }).then(({ data }) => {
-      if (ativo && data) setAnotacoes(data as unknown as Anotacao[])
-    })
+    carregarAnotacoes()
     carregarTarefas()
     return () => { ativo = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -212,19 +234,37 @@ export function LeadDetailModal({
           </div>
 
           <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><FileText className="w-4 h-4 text-slate-400" />Anotações da Sara</div>
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><FileText className="w-4 h-4 text-slate-400" />Anotações</div>
             {anotacoes.length === 0 ? (
-              <p className="text-xs text-slate-400">Nenhuma anotação ainda.</p>
+              <p className="text-xs text-slate-400 mb-3">Nenhuma anotação ainda.</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 mb-3">
                 {anotacoes.map((a) => (
                   <div key={a.id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
-                    <p className="text-sm text-slate-700">{a.conteudo}</p>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{a.conteudo}</p>
                     <p className="text-[10px] text-slate-400 mt-1">{new Date(a.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
                   </div>
                 ))}
               </div>
             )}
+            <div className="rounded-lg bg-slate-50 p-2.5 space-y-2">
+              <textarea
+                value={novaAnotacao}
+                onChange={(e) => setNovaAnotacao(e.target.value)}
+                placeholder="Nova anotação (ex: Atendi por ligação em 01/07 — pediu proposta por e-mail, decide semana que vem)"
+                rows={3}
+                className={`${inputCls} resize-y`}
+              />
+              <div className="flex justify-end">
+                <button
+                  onClick={addAnotacao}
+                  disabled={salvandoAnot || !novaAnotacao.trim()}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" /> Adicionar anotação
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
