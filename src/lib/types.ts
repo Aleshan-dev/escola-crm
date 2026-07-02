@@ -25,6 +25,9 @@ export type Lead = {
   temperatura: 'frio' | 'morno' | 'quente'
   temperatura_manual?: boolean
   ia_ativa: boolean
+  followup_count?: number
+  ultimo_followup_em?: string | null
+  followup_status?: 'ativo' | 'esgotado'
   tags: string[]
   motivo_perda: string | null
   proxima_acao: string | null

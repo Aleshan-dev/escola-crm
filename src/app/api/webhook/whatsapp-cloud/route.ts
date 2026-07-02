@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     const iaAtiva: boolean = lead.ia_ativa
 
     await supabase.from('mensagens').insert({ lead_id: leadId, direcao: 'in', conteudo, whatsapp_message_id: wid })
-    await supabase.from('leads').update({ ultima_interacao_em: new Date().toISOString() }).eq('id', leadId)
+    await supabase.from('leads').update({ ultima_interacao_em: new Date().toISOString(), followup_count: 0, followup_status: 'ativo' }).eq('id', leadId)
 
     if (iaAtiva) {
       const { data: todasColunas } = await supabase.from('colunas').select('id, nome, ordem').order('ordem')

@@ -17,7 +17,7 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core'
-import { Bot, MessageSquare, Plus, Search, Loader2, Clock } from 'lucide-react'
+import { Bot, MessageSquare, Plus, Search, Loader2, Clock, Send } from 'lucide-react'
 import Link from 'next/link'
 
 function diasNaEtapa(entrou: string): number {
@@ -255,6 +255,23 @@ function CardLead({
             {t}
           </span>
         ))}
+        {(lead.followup_count ?? 0) > 0 && lead.followup_status !== 'esgotado' && (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 inline-flex items-center gap-1"
+            title="Sara fez follow-up automático"
+          >
+            <Send className="w-2.5 h-2.5" />
+            {lead.followup_count}
+          </span>
+        )}
+        {lead.followup_status === 'esgotado' && (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500"
+            title="Follow-up automático esgotado (sem resposta após várias tentativas)"
+          >
+            follow-up esgotado
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2 mt-2">

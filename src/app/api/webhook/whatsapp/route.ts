@@ -87,9 +87,14 @@ export async function POST(req: NextRequest) {
       whatsapp_message_id: wid,
     })
 
+    // Lead respondeu: atualiza última interação e reengaja o follow-up (zera contador)
     await supabase
       .from('leads')
-      .update({ ultima_interacao_em: new Date().toISOString() })
+      .update({
+        ultima_interacao_em: new Date().toISOString(),
+        followup_count: 0,
+        followup_status: 'ativo',
+      })
       .eq('id', lead.id)
 
     if (lead.ia_ativa && !lead.precisa_atendimento_humano) {
