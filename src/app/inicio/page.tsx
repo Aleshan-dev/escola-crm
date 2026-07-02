@@ -30,6 +30,7 @@ export default function InicioPage() {
   const [usuarios, setUsuarios] = useState<any[]>([])
   const [dim, setDim] = useState<'serie' | 'origem' | 'dono'>('serie')
   const [periodo, setPeriodo] = useState('mes')
+  const [fstats, setFstats] = useState<any>(null)
 
   useEffect(() => {
     (async () => {
@@ -51,6 +52,8 @@ export default function InicioPage() {
       setTarefas((tr.data as any[]) || [])
       setMetas((mr.data as any[]) || [])
       setUsuarios((ur.data as any[]) || [])
+      const { data: fs2 } = await supabase.from('v_followup_stats').select('*').maybeSingle()
+      setFstats(fs2 || null)
       setLoading(false)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,10 +92,22 @@ export default function InicioPage() {
     const operadores = Object.values(opMap)
     if (operadores.length === 0) operadores.push({ nome: nomeUser ? cap(nomeUser) : 'Operador', matriculas: 0, tarefas: 0, contatos: 0 })
 
+    const funilOrdenado = [...cols].sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+    const funil = funilOrdenado.map((c) => ({ nome: c.nome, qtd: ls.filter((l) => l.coluna_id === c.id).length }))
+    const totalLeads = ls.length
+    const qtdPor = (re: RegExp) => funil.find((c) => re.test(c.nome))?.qtd || 0
+    const matriculados = qtdPor(/matric/i)
+    const perdidos = qtdPor(/perdid/i)
+    const visitaAgendada = qtdPor(/agendada/i)
+    const visitaRealizada = qtdPor(/realizada/i)
+    const taxaMatricula = totalLeads > 0 ? (matriculados / totalLeads) * 100 : 0
+    const maxFunil = Math.max(1, ...funil.map((c) => c.qtd))
+
     return {
       contatosTotal: ls.length, contatosMes, metaContatos: somaMeta(/contato/i),
       matriculasTotal: matricLeads.length, matriculasMes, metaMatriculas: somaMeta(/matr[ií]c/i),
       tabela, totalAlunos, operadores,
+      funil, totalLeads, matriculados, perdidos, visitaAgendada, visitaRealizada, taxaMatricula, maxFunil,
     }
   }, [colunas, leads, tarefas, metas, usuarios, funilSel, dim, periodo, nomeUser])
 
@@ -126,6 +141,40 @@ export default function InicioPage() {
             <div className="flex gap-4 overflow-x-auto pb-1">
               <KpiCard noun="novas matrículas" meta={d.metaMatriculas} realizado={d.matriculasMes} prev={previsao(d.matriculasMes)} pct={pct(previsao(d.matriculasMes), d.metaMatriculas)} total={d.matriculasTotal} />
               <KpiCard noun="novos contatos" meta={d.metaContatos} realizado={d.contatosMes} prev={previsao(d.contatosMes)} pct={pct(previsao(d.contatosMes), d.metaContatos)} total={d.contatosTotal} />
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="mb-1 font-bold text-slate-900">Funil de conversão</h2>
+              <p className="mb-4 text-xs text-slate-500">Distribuição atual dos leads por etapa e efetividade do follow-up automático.</p>
+
+              <div className="mb-5 grid gap-3 sm:grid-cols-3">
+                <StatBox label="Taxa de matrícula" valor={`${d.taxaMatricula.toFixed(1).replace('.', ',')}%`} sub={`${d.matriculados} de ${d.totalLeads} leads`} />
+                <StatBox label="Em visita" valor={`${d.visitaAgendada + d.visitaRealizada}`} sub={`${d.visitaAgendada} agendadas · ${d.visitaRealizada} realizadas`} />
+                <StatBox label="Perdidos" valor={`${d.perdidos}`} sub={d.totalLeads > 0 ? `${Math.round((d.perdidos / d.totalLeads) * 100)}% do total` : '—'} />
+              </div>
+
+              <div className="space-y-2">
+                {d.funil.map((c) => (
+                  <div key={c.nome} className="flex items-center gap-3">
+                    <span className="w-36 truncate text-sm text-slate-700">{c.nome}</span>
+                    <div className="flex-1"><div className="h-2.5 overflow-hidden rounded-full bg-slate-100"><div className="h-2.5 rounded-full bg-indigo-500" style={{ width: `${(c.qtd / d.maxFunil) * 100}%` }} /></div></div>
+                    <span className="w-8 text-right text-sm font-medium text-slate-600">{c.qtd}</span>
+                  </div>
+                ))}
+              </div>
+
+              {fstats && (
+                <div className="mt-5 rounded-lg bg-indigo-50 p-4">
+                  <div className="mb-3 text-sm font-semibold text-indigo-900">Efetividade do follow-up automático</div>
+                  <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
+                    <FollowStat label="Enviados" v={fstats.enviados} />
+                    <FollowStat label="Leads alcançados" v={fstats.leads_alcancados} />
+                    <FollowStat label="Responderam" v={fstats.leads_responderam} />
+                    <FollowStat label="Taxa de resposta" v={fstats.leads_alcancados > 0 ? `${Math.round((fstats.leads_responderam / fstats.leads_alcancados) * 100)}%` : '—'} />
+                  </div>
+                  {fstats.falhas > 0 && <div className="mt-2 text-center text-xs text-amber-700">{fstats.falhas} envio(s) falharam</div>}
+                </div>
+              )}
             </div>
 
             <a className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-blue-600 hover:underline">
@@ -221,6 +270,25 @@ function MetricRow({ label, v }: { label: string; v: number }) {
     <div className="flex items-center justify-between py-2">
       <span className="text-slate-600">{label}</span>
       <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800">{v}</span>
+    </div>
+  )
+}
+
+function StatBox({ label, valor, sub }: { label: string; valor: string; sub: string }) {
+  return (
+    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+      <div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="text-2xl font-bold text-slate-900">{valor}</div>
+      <div className="text-xs text-slate-500">{sub}</div>
+    </div>
+  )
+}
+
+function FollowStat({ label, v }: { label: string; v: number | string }) {
+  return (
+    <div>
+      <div className="text-xl font-bold text-indigo-900">{v}</div>
+      <div className="text-[11px] text-indigo-700/70">{label}</div>
     </div>
   )
 }
