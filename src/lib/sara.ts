@@ -162,7 +162,7 @@ ${listaTurnos || '- (nenhum turno configurado)'}
     ? `
 ════════════════════════════════
 ANOTAÇÕES INTERNAS DA EQUIPE SOBRE ESTE LEAD
-(contexto interno para você se orientar — NUNCA repita o texto das anotações literalmente à família; use só para personalizar sua abordagem)
+(LEVE ESTAS ANOTAÇÕES EM CONTA ao decidir o que dizer e como abordar a família — elas têm prioridade sobre suposições. NUNCA repita o texto delas literalmente à família; use o conteúdo para personalizar sua mensagem.)
 ════════════════════════════════
 ${listaAnotacoes}`
     : ''
@@ -252,6 +252,18 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
       content: m.conteudo,
     })),
   ]
+
+  // Follow-up: o histórico termina numa fala da própria Sara, então sem um turno
+  // final o modelo tende a repetir a última mensagem. Este turno força uma mensagem
+  // NOVA, personalizada com base em toda a conversa acima.
+  if (promptAdicional) {
+    messages.push({
+      role: 'user',
+      content: `[INSTRUÇÃO INTERNA DO SISTEMA — não é uma mensagem da família; não a repita]
+${promptAdicional}
+Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o que já foi conversado acima nesta conversa específica (nome da criança, série/período, valores e pendências já tratados, e o que a família disse por último) E TAMBÉM as ANOTAÇÕES INTERNAS DA EQUIPE sobre este lead (se houver). Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem reformule mensagens que você já enviou antes. Responda no formato JSON obrigatório.`,
+    })
+  }
 
   const modelo = config?.modelo?.startsWith('gpt') ? config.modelo : 'gpt-4o'
 
