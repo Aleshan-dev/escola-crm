@@ -7,11 +7,8 @@ import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import { ArrowLeft, Loader2, MessageSquareText } from 'lucide-react'
 
-const APP_ID = process.env.NEXT_PUBLIC_META_APP_ID || '2451104688636688'
-const CONFIG_ID = process.env.NEXT_PUBLIC_META_CONFIG_ID || '1479514487198126'
-// Vazio = fluxo padrão. Para coexistência, use a Configuration de "Business App users"
-// e defina NEXT_PUBLIC_META_FEATURE_TYPE conforme a spec atual da Meta.
-const FEATURE_TYPE = process.env.NEXT_PUBLIC_META_FEATURE_TYPE || ''
+const APP_ID = '2451104688636688'
+const CONFIG_ID = '1479514487198126'
 
 type Conta = {
   id: string
@@ -28,7 +25,6 @@ export default function WhatsappOficialPage() {
   const [carregando, setCarregando] = useState(true)
   const [conectando, setConectando] = useState(false)
   const [msg, setMsg] = useState('')
-  const [status, setStatus] = useState<any>(null)
 
   const carregar = useCallback(async () => {
     const { data } = await supabase
@@ -40,10 +36,6 @@ export default function WhatsappOficialPage() {
   }, [supabase])
 
   useEffect(() => { carregar() }, [carregar])
-
-  useEffect(() => {
-    fetch('/api/whatsapp-cloud/status').then((r) => r.json()).then(setStatus).catch(() => {})
-  }, [])
 
   // Carrega o SDK do Facebook
   useEffect(() => {
@@ -96,7 +88,7 @@ export default function WhatsappOficialPage() {
         config_id: CONFIG_ID,
         response_type: 'code',
         override_default_response_type: true,
-        extras: { setup: {}, featureType: FEATURE_TYPE, sessionInfoVersion: '3' },
+        extras: { setup: {} },
       }
     )
   }
@@ -123,20 +115,6 @@ export default function WhatsappOficialPage() {
         </p>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5">
-          {status && (
-            <div className="mb-4 rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm">
-              <div className="mb-2 font-semibold text-slate-700">Diagnóstico da conexão</div>
-              <DiagRow ok={status.metaAppSecret} label="App Secret da Meta (META_APP_SECRET)" hint="Necessário para conectar — configure na Vercel." />
-              <DiagRow ok={status.verifyToken} label="Token de verificação do webhook (WHATSAPP_VERIFY_TOKEN)" hint="Necessário para o webhook validar na Meta." />
-              <div className="mt-3">
-                <div className="text-xs font-medium text-slate-500">URL do webhook (cadastre no app da Meta, assinando o campo &ldquo;messages&rdquo;):</div>
-                <div className="mt-1 flex items-center gap-2">
-                  <code className="flex-1 break-all rounded border border-slate-200 bg-white px-2 py-1 text-xs">{status.webhookUrl}</code>
-                  <button onClick={() => navigator.clipboard?.writeText(status.webhookUrl)} className="text-xs font-medium text-blue-600 hover:underline">Copiar</button>
-                </div>
-              </div>
-            </div>
-          )}
           <button
             onClick={conectar}
             disabled={conectando}
@@ -173,18 +151,6 @@ export default function WhatsappOficialPage() {
             )}
           </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function DiagRow({ ok, label, hint }: { ok: boolean; label: string; hint: string }) {
-  return (
-    <div className="flex items-start gap-2 py-1">
-      <span className={`mt-0.5 text-xs ${ok ? 'text-green-600' : 'text-red-600'}`}>{ok ? '✓' : '✕'}</span>
-      <div>
-        <div className="text-slate-700">{label}</div>
-        {!ok && <div className="text-xs text-red-600">{hint}</div>}
       </div>
     </div>
   )
