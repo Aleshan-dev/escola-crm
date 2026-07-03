@@ -316,6 +316,14 @@ export async function processarMensagemRecebida(
         }
       }
 
+      // Anotação automática: registra um resumo interno quando há fato novo na conversa.
+      if (saraResult.resumo_anotacao && saraResult.resumo_anotacao.trim()) {
+        await supabase.from('anotacoes').insert({
+          lead_id: lead.id,
+          conteudo: saraResult.resumo_anotacao.trim(),
+        })
+      }
+
       // Sugestão de matrícula: a Sara sinaliza; o gestor confirma movendo para "Matriculados".
       // Update condicional (só quando ainda era false) evita notificar o gestor repetidamente.
       if (saraResult.sugerir_matricula) {

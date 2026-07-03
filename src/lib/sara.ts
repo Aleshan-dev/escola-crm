@@ -43,6 +43,7 @@ export type SaraResposta = {
   motivo_transbordo: string | null
   agendar_visita: { data_hora: string } | null
   sugerir_matricula: boolean
+  resumo_anotacao: string | null
 }
 
 export async function gerarRespostaSara(
@@ -189,7 +190,12 @@ Não há horários de visita disponíveis no momento. Se a família quiser agend
   const dadosFamilia = lead.familia
   const dadosCrianca = lead.crianca
 
+  // Data de hoje no fuso de Rio Branco/Acre (UTC-5) — para a Sara escrever datas absolutas.
+  const hojeAcre = new Date(Date.now() - 5 * 60 * 60 * 1000).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
+
   const systemPrompt = `${config?.system_prompt || 'Você é Sara, consultora de matrículas do Colégio Pequenos Guardiões.'}
+
+Hoje é ${hojeAcre} (horário de Rio Branco/Acre).
 
 ════════════════════════════════
 BASE DE CONHECIMENTO OFICIAL DA ESCOLA
@@ -231,6 +237,13 @@ Marque transbordo=true se:
 Gatilho automático: ${countVerificar >= 2 ? 'SIM — FORCE transbordo=true agora.' : 'não ativo'}
 
 ════════════════════════════════
+ANOTAÇÃO INTERNA (resumo_anotacao)
+════════════════════════════════
+Preencha "resumo_anotacao" com 1-2 frases resumindo o que há de NOVO nesta conversa (dado coletado, visita marcada, objeção, decisão da família). Se não houver fato novo relevante, use null.
+- Escreva SEMPRE com DATAS ABSOLUTAS (ex.: "visita em 30/06/2026"). NUNCA use termos relativos como "hoje", "amanhã", "semana que vem" — converta usando a data de hoje informada acima.
+- É um registro interno para a equipe; seja objetiva.
+
+════════════════════════════════
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
 ════════════════════════════════
 {
@@ -242,7 +255,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
   "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,
-  "sugerir_matricula": false
+  "sugerir_matricula": false,
+  "resumo_anotacao": "1-2 frases com datas absolutas ou null"
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -291,6 +305,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
           ? { data_hora: parsed.agendar_visita.data_hora }
           : null,
       sugerir_matricula: parsed.sugerir_matricula === true,
+      resumo_anotacao: parsed.resumo_anotacao ?? null,
     }
   } catch {
     return {
@@ -303,6 +318,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
       motivo_transbordo: null,
       agendar_visita: null,
       sugerir_matricula: false,
+      resumo_anotacao: null,
     }
   }
 }
