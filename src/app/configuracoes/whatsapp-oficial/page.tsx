@@ -8,7 +8,7 @@ import { Topbar } from '@/components/Topbar'
 import { ArrowLeft, Loader2, MessageSquareText } from 'lucide-react'
 
 const APP_ID = '2451104688636688'
-const CONFIG_ID = '28216086524645817'
+const CONFIG_ID = '1555408462970300'
 
 type Conta = {
   id: string
