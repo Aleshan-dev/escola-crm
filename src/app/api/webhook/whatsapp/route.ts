@@ -7,6 +7,10 @@ import {
   registrarMensagemManual,
   type EnviarTexto,
 } from '@/lib/atendimento'
+import { extrairConteudoMidia } from '@/lib/midia'
+
+// Dá folga para baixar mídia + transcrever/descrever antes de responder.
+export const maxDuration = 30
 
 export async function GET() {
   return NextResponse.json({ ok: true, msg: 'Webhook escola-crm online' })
@@ -33,18 +37,27 @@ export async function POST(req: NextRequest) {
     if (!jid || jid.includes('@g.us')) return NextResponse.json({ ignored: 'group ou sem jid' })
 
     const telefone = cleanWhatsappJid(jid)
-    const conteudo: string =
+    const texto: string =
       data?.message?.conversation ||
       data?.message?.extendedTextMessage?.text ||
-      data?.message?.imageMessage?.caption ||
-      '[mídia ou tipo não suportado ainda]'
+      ''
     const pushName: string = data?.pushName || 'Família'
     const wid: string = data?.key?.id || ''
 
     // fromMe: mensagem enviada pelo próprio número (Sara via API ou manual pelo celular)
     if (data?.key?.fromMe === true) {
-      const status = await registrarMensagemManual(supabase, { telefone, conteudo, wid })
+      const conteudoOut = texto || data?.message?.imageMessage?.caption || '[mídia]'
+      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid })
       return NextResponse.json({ ok: true, fromMe: status })
+    }
+
+    // Mensagem recebida: se não veio texto, tenta interpretar áudio/imagem.
+    let conteudo = texto
+    if (!conteudo) {
+      conteudo =
+        (await extrairConteudoMidia(data)) ||
+        data?.message?.imageMessage?.caption ||
+        '[mídia ou tipo não suportado ainda]'
     }
 
     // Atribuição: mensagem vinda de anúncio click-to-WhatsApp traz o "externalAdReply"
