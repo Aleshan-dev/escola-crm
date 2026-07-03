@@ -4,6 +4,8 @@ import { evolutionSendText } from '@/lib/evolution'
 import { gerarRespostaSara } from '@/lib/sara'
 import {
   dentroHorarioComercial,
+  deveMarcarPerdidoPorSilencio,
+  DIAS_SILENCIO_PERDIDO,
   ehVisitaAmanha,
   estaDevido,
   horaAcre,
@@ -14,6 +16,7 @@ import {
 } from '@/lib/followup-regras'
 import { MAX_ENVIOS_POR_EXECUCAO, jitterMs, sleep } from '@/lib/pacing'
 import { registrarAlerta } from '@/lib/alertas'
+import { notificarGestor } from '@/lib/notificacoes'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 export const maxDuration = 30
@@ -49,6 +52,71 @@ type Resultado = {
 }
 
 const ms = (iso: string | null): number => (iso ? new Date(iso).getTime() : 0)
+
+type LeadSilencio = {
+  id: string
+  coluna_id: string
+  ultimo_followup_em: string | null
+  familia: { nome_responsavel: string | null; telefone: string | null } | null
+}
+
+/** Move para "Perdidos" leads que esgotaram os follow-ups e ficaram N dias sem responder. */
+async function marcarPerdidosPorSilencio(
+  supabase: ReturnType<typeof createServerAdminClient>,
+  agora: number
+): Promise<number> {
+  const { data: colunas } = await supabase.from('colunas').select('id, nome')
+  if (!colunas) return 0
+  const cols = colunas as { id: string; nome: string }[]
+  const perdidos = cols.find((c) => /perdid/i.test(c.nome))
+  if (!perdidos) return 0
+  const terminaisIds = new Set(cols.filter((c) => /matric|perdid/i.test(c.nome)).map((c) => c.id))
+
+  const { data: candidatos } = await supabase
+    .from('leads')
+    .select('id, coluna_id, ultimo_followup_em, familia:familias(nome_responsavel, telefone)')
+    .eq('followup_status', 'esgotado')
+    .eq('arquivado', false)
+
+  let movidos = 0
+  for (const l of (candidatos || []) as unknown as LeadSilencio[]) {
+    if (terminaisIds.has(l.coluna_id)) continue
+    if (!deveMarcarPerdidoPorSilencio(ms(l.ultimo_followup_em), agora)) continue
+
+    await supabase
+      .from('leads')
+      .update({
+        coluna_id: perdidos.id,
+        entrou_coluna_em: new Date().toISOString(),
+        motivo_perda: 'Sem resposta após follow-ups',
+      })
+      .eq('id', l.id)
+
+    await supabase.from('acoes_sara').insert({
+      lead_id: l.id,
+      tipo: 'movimentacao',
+      conteudo: `Perdido automaticamente: sem resposta por ${DIAS_SILENCIO_PERDIDO} dias após os follow-ups`,
+      razao: 'sem_resposta',
+      sucesso: true,
+      coluna_origem_id: l.coluna_id,
+      coluna_destino_id: perdidos.id,
+    })
+
+    await supabase.from('eventos_timeline').insert({
+      lead_id: l.id,
+      tipo: 'movimentacao',
+      descricao: `Movido para "Perdidos" automaticamente — sem resposta por ${DIAS_SILENCIO_PERDIDO} dias após os follow-ups.`,
+    })
+
+    await notificarGestor(
+      supabase,
+      'encerramento',
+      `🚫 *Atendimento encerrado — Perdido*\nFamília: ${l.familia?.nome_responsavel || 'Família'}\nMotivo: sem resposta após follow-ups`
+    )
+    movidos++
+  }
+  return movidos
+}
 
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET
@@ -193,11 +261,21 @@ export async function GET(req: NextRequest) {
     resultados.push({ lead: lead.id, trigger, enviado, erro })
   }
 
+  // Encerra por silêncio: leads que esgotaram os follow-ups e ficaram N dias sem responder.
+  let perdidosPorSilencio = 0
+  try {
+    perdidosPorSilencio = await marcarPerdidosPorSilencio(supabase, agora)
+  } catch (e) {
+    console.error('Falha ao marcar perdidos por silêncio:', e)
+    await registrarAlerta(supabase, 'cron/followup', e instanceof Error ? e.message : 'perdidos_por_silencio')
+  }
+
   return NextResponse.json({
     ok: true,
     hora_acre: horaAcre(agora),
     processados: resultados.length,
     enviados: resultados.filter((r) => r.enviado).length,
+    perdidos_por_silencio: perdidosPorSilencio,
     resultados,
   })
 }

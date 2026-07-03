@@ -42,6 +42,7 @@ export type SaraResposta = {
   transbordo: boolean
   motivo_transbordo: string | null
   agendar_visita: { data_hora: string } | null
+  sugerir_matricula: boolean
 }
 
 export async function gerarRespostaSara(
@@ -118,7 +119,8 @@ Critérios (só avance UMA etapa, ordem atual+1):
 - Visita Agendada→Visita Realizada: família confirmou que a visita ocorreu
 - Visita Realizada→Repescagem: família pediu prazo ou demonstrou dúvida
 - Qualquer→Perdidos: família recusou explicitamente (razao_movimentacao obrigatória)
-"Matriculados" NUNCA pode ser destino.`
+"Matriculados" NUNCA pode ser destino.
+Se a família CONFIRMAR que vai matricular / que fechou / que já pagou a matrícula, NÃO mova para Matriculados. Em vez disso, preencha "sugerir_matricula": true (o gestor confirma manualmente). Em qualquer outro caso, "sugerir_matricula": false.`
       : ''
 
   const baseKnowledge = (kb || [])
@@ -239,7 +241,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral" } ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
-  "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null
+  "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,
+  "sugerir_matricula": false
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -275,6 +278,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
         parsed.agendar_visita && parsed.agendar_visita.data_hora
           ? { data_hora: parsed.agendar_visita.data_hora }
           : null,
+      sugerir_matricula: parsed.sugerir_matricula === true,
     }
   } catch {
     return {
@@ -286,6 +290,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
       transbordo: false,
       motivo_transbordo: null,
       agendar_visita: null,
+      sugerir_matricula: false,
     }
   }
 }

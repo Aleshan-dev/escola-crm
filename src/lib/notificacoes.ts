@@ -4,12 +4,13 @@ import { evolutionSendText } from '@/lib/evolution'
 // Notificações proativas para o WhatsApp do gestor (telefone_transbordo em config_ia).
 // Cada tipo tem uma flag liga/desliga; transbordo é sempre enviado (crítico).
 
-export type TipoNotif = 'visita' | 'encerramento' | 'transbordo'
+export type TipoNotif = 'visita' | 'encerramento' | 'transbordo' | 'sugestao_matricula'
 
 const FLAG_POR_TIPO: Record<TipoNotif, 'notif_visita_agendada' | 'notif_encerramento' | null> = {
   visita: 'notif_visita_agendada',
   encerramento: 'notif_encerramento',
   transbordo: null, // sempre notifica
+  sugestao_matricula: null, // sempre notifica (baixa frequência, exige ação do gestor)
 }
 
 export async function notificarGestor(

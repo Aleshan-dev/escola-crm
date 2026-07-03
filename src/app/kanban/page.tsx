@@ -256,6 +256,14 @@ function CardLead({
 
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${tempColor}`}>{lead.temperatura}</span>
+        {lead.sugestao_matricula && (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold"
+            title="Sara sugere matrícula — confirme movendo o lead para Matriculados"
+          >
+            🎓 Sugere matrícula
+          </span>
+        )}
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium inline-flex items-center gap-1 ${diasColor}`}>
           <Clock className="w-2.5 h-2.5" />
           {dias === 0 ? 'hoje' : `${dias}d`}

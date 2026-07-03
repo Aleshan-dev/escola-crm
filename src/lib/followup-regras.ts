@@ -74,6 +74,24 @@ export function ehVisitaAmanha(dataVisitaMs: number, agoraMs: number): boolean {
   )
 }
 
+/** Dias de silêncio (após esgotar os follow-ups) para dar o lead como perdido. */
+export const DIAS_SILENCIO_PERDIDO = 7
+
+/**
+ * O lead deve virar "Perdido" por silêncio?
+ * Regra: já esgotou os follow-ups da etapa e passou N dias desde o último follow-up
+ * sem resposta (qualquer resposta zera o contador e reativa o follow-up, então um lead
+ * ainda "esgotado" é porque continuou sem responder).
+ */
+export function deveMarcarPerdidoPorSilencio(
+  ultimoFollowupMs: number,
+  agoraMs: number,
+  diasSilencio: number = DIAS_SILENCIO_PERDIDO
+): boolean {
+  if (ultimoFollowupMs <= 0) return false
+  return agoraMs - ultimoFollowupMs >= diasSilencio * 24 * 60 * 60 * 1000
+}
+
 /** Texto do prompt que orienta a Sara conforme o gatilho. */
 export function promptPorTrigger(trigger: TriggerNome, nome: string, tentativa: number): string {
   const insistencia =

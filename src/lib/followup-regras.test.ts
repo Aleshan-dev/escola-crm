@@ -8,6 +8,8 @@ import {
   estaDevido,
   respondeuAposFollowup,
   ehVisitaAmanha,
+  deveMarcarPerdidoPorSilencio,
+  DIAS_SILENCIO_PERDIDO,
 } from './followup-regras'
 
 const H = 60 * 60 * 1000
@@ -85,6 +87,23 @@ describe('respondeuAposFollowup', () => {
   })
   it('ignora quando nunca houve follow-up', () => {
     expect(respondeuAposFollowup(agora, 0)).toBe(false)
+  })
+})
+
+describe('deveMarcarPerdidoPorSilencio', () => {
+  const agora = Date.now()
+  const D = 24 * H
+  it('marca perdido após o prazo de silêncio', () => {
+    expect(deveMarcarPerdidoPorSilencio(agora - (DIAS_SILENCIO_PERDIDO + 1) * D, agora)).toBe(true)
+  })
+  it('não marca antes do prazo', () => {
+    expect(deveMarcarPerdidoPorSilencio(agora - (DIAS_SILENCIO_PERDIDO - 1) * D, agora)).toBe(false)
+  })
+  it('marca exatamente no limite do prazo', () => {
+    expect(deveMarcarPerdidoPorSilencio(agora - DIAS_SILENCIO_PERDIDO * D, agora)).toBe(true)
+  })
+  it('ignora quando nunca houve follow-up', () => {
+    expect(deveMarcarPerdidoPorSilencio(0, agora)).toBe(false)
   })
 })
 

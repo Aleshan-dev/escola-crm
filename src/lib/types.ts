@@ -28,6 +28,8 @@ export type Lead = {
   followup_count?: number
   ultimo_followup_em?: string | null
   followup_status?: 'ativo' | 'esgotado'
+  sugestao_matricula?: boolean
+  sugestao_matricula_em?: string | null
   tags: string[]
   motivo_perda: string | null
   proxima_acao: string | null

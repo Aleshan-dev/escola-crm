@@ -316,6 +316,29 @@ export async function processarMensagemRecebida(
         }
       }
 
+      // Sugestão de matrícula: a Sara sinaliza; o gestor confirma movendo para "Matriculados".
+      // Update condicional (só quando ainda era false) evita notificar o gestor repetidamente.
+      if (saraResult.sugerir_matricula) {
+        const { data: flip } = await supabase
+          .from('leads')
+          .update({ sugestao_matricula: true, sugestao_matricula_em: new Date().toISOString() })
+          .eq('id', lead.id)
+          .eq('sugestao_matricula', false)
+          .select('id')
+        if (flip && flip.length > 0) {
+          await supabase.from('eventos_timeline').insert({
+            lead_id: lead.id,
+            tipo: 'sugestao_matricula',
+            descricao: 'Sara sinalizou que a família confirmou matrícula — aguardando confirmação do gestor.',
+          })
+          await notificarGestor(
+            supabase,
+            'sugestao_matricula',
+            `📝 *Sara sugere matrícula*\nFamília: ${familia.nome_responsavel || 'Família'}\nTelefone: ${telefone}\nConfirme movendo o lead para "Matriculados".`
+          )
+        }
+      }
+
       // Transbordo
       if (saraResult.transbordo) {
         await supabase.from('leads').update({
