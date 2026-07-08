@@ -2,6 +2,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 import { notificarGestor } from '@/lib/notificacoes'
 import { labelAcre } from '@/lib/disponibilidade'
+import { sleep } from '@/lib/pacing'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -10,6 +11,27 @@ type SupaAdmin = ReturnType<typeof createServerAdminClient>
 
 /** Envia um texto pelo canal e devolve o id da mensagem (ou null). */
 export type EnviarTexto = (telefone: string, texto: string) => Promise<string | null>
+
+/** Quebra a resposta da Sara em balões curtos (máx. 3) — como o manual pede.
+ * Primeiro tenta por parágrafos (linha em branco); se vier um bloco único longo,
+ * quebra por frases em pedaços de ~160 caracteres. */
+export function dividirEmBaloes(texto: string): string[] {
+  const porParagrafo = texto.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
+  let baloes = porParagrafo.length ? porParagrafo : [texto.trim()]
+
+  if (baloes.length === 1 && baloes[0].length > 200) {
+    const frases = baloes[0].match(/[^.!?]+[.!?]*\s*/g)?.map((s) => s.trim()).filter(Boolean) || [baloes[0]]
+    baloes = []
+    let atual = ''
+    for (const f of frases) {
+      if (atual && (atual + ' ' + f).length > 160) { baloes.push(atual); atual = f }
+      else atual = atual ? `${atual} ${f}` : f
+    }
+    if (atual) baloes.push(atual)
+  }
+
+  return baloes.map((b) => b.trim()).filter(Boolean).slice(0, 3)
+}
 
 /**
  * ADR-005: mensagem enviada pelo próprio número (fromMe). Se for da Sara (via API)
@@ -169,14 +191,18 @@ export async function processarMensagemRecebida(
         colunaAtual
       )
 
-      const sentId = await enviarTexto(telefone, saraResult.resposta)
-
-      await supabase.from('mensagens').insert({
-        lead_id: lead.id,
-        direcao: 'out_ia',
-        conteudo: saraResult.resposta,
-        whatsapp_message_id: sentId,
-      })
+      // Envia em balões curtos (uma mensagem por parágrafo), conforme o manual.
+      const baloes = dividirEmBaloes(saraResult.resposta)
+      for (let i = 0; i < baloes.length; i++) {
+        const sentId = await enviarTexto(telefone, baloes[i])
+        await supabase.from('mensagens').insert({
+          lead_id: lead.id,
+          direcao: 'out_ia',
+          conteudo: baloes[i],
+          whatsapp_message_id: sentId,
+        })
+        if (i < baloes.length - 1) await sleep(900)
+      }
 
       // Dados da família extraídos
       if (saraResult.familia_dados) {

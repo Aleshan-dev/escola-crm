@@ -17,6 +17,7 @@ import {
 import { MAX_ENVIOS_POR_EXECUCAO, jitterMs, sleep } from '@/lib/pacing'
 import { registrarAlerta } from '@/lib/alertas'
 import { notificarGestor } from '@/lib/notificacoes'
+import { dividirEmBaloes } from '@/lib/atendimento'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 export const maxDuration = 30
@@ -207,14 +208,18 @@ export async function GET(req: NextRequest) {
         promptPorTrigger(trigger, lead.familia!.nome_responsavel, count + 1)
       )
       texto = saraResult.resposta
-      const wid = await enviarTextoWhatsApp(tel, texto)
+      const baloes = dividirEmBaloes(texto)
+      for (let i = 0; i < baloes.length; i++) {
+        const wid = await enviarTextoWhatsApp(tel, baloes[i])
+        await supabase.from('mensagens').insert({
+          lead_id: lead.id,
+          direcao: 'out_ia',
+          conteudo: baloes[i],
+          whatsapp_message_id: wid,
+        })
+        if (i < baloes.length - 1) await sleep(900)
+      }
       enviado = true
-      await supabase.from('mensagens').insert({
-        lead_id: lead.id,
-        direcao: 'out_ia',
-        conteudo: texto,
-        whatsapp_message_id: wid,
-      })
     } catch (e) {
       erro = e instanceof Error ? e.message : 'erro desconhecido'
       console.error(`Follow-up falhou para lead ${lead.id}:`, erro)

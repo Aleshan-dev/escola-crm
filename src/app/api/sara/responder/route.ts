@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase-server'
 import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 import { gerarRespostaSara } from '@/lib/sara'
+import { dividirEmBaloes } from '@/lib/atendimento'
+import { sleep } from '@/lib/pacing'
 
 // Faz a Sara responder AGORA a última mensagem do lead (continuar de onde parou),
 // acionado manualmente pelo atendente na tela do lead.
@@ -27,14 +29,17 @@ export async function POST(req: NextRequest) {
     const sara = await gerarRespostaSara(lead_id)
     if (!sara.resposta?.trim()) return NextResponse.json({ error: 'Sara não gerou resposta' }, { status: 500 })
 
-    const wid = await enviarTextoWhatsApp(lead.familia.telefone, sara.resposta)
-
-    await supabase.from('mensagens').insert({
-      lead_id,
-      direcao: 'out_ia',
-      conteudo: sara.resposta,
-      whatsapp_message_id: wid,
-    })
+    const baloes = dividirEmBaloes(sara.resposta)
+    for (let i = 0; i < baloes.length; i++) {
+      const wid = await enviarTextoWhatsApp(lead.familia.telefone, baloes[i])
+      await supabase.from('mensagens').insert({
+        lead_id,
+        direcao: 'out_ia',
+        conteudo: baloes[i],
+        whatsapp_message_id: wid,
+      })
+      if (i < baloes.length - 1) await sleep(900)
+    }
 
     if (sara.resumo_anotacao && sara.resumo_anotacao.trim()) {
       await supabase.from('anotacoes').insert({ lead_id, conteudo: sara.resumo_anotacao.trim() })
