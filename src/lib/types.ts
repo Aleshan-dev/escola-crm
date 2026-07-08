@@ -30,6 +30,14 @@ export type Lead = {
   followup_status?: 'ativo' | 'esgotado'
   sugestao_matricula?: boolean
   sugestao_matricula_em?: string | null
+  cog_intencao?: string | null
+  cog_emocao?: string | null
+  cog_temperatura?: string | null
+  cog_interesse?: number | null
+  cog_urgencia?: number | null
+  cog_probabilidade?: number | null
+  cog_proxima_acao?: string | null
+  cog_atualizado_em?: string | null
   tags: string[]
   motivo_perda: string | null
   proxima_acao: string | null

@@ -33,6 +33,16 @@ export type SaraCriancaDados = {
   periodo?: string
 }
 
+export type SaraAnalise = {
+  intencao: string | null
+  emocao: string | null
+  temperatura: string | null
+  interesse: number | null
+  urgencia: number | null
+  probabilidade: number | null
+  proxima_acao: string | null
+}
+
 export type SaraResposta = {
   resposta: string
   proxima_coluna_id: string | null
@@ -44,6 +54,7 @@ export type SaraResposta = {
   agendar_visita: { data_hora: string } | null
   sugerir_matricula: boolean
   resumo_anotacao: string | null
+  analise: SaraAnalise | null
 }
 
 export async function gerarRespostaSara(
@@ -244,6 +255,11 @@ Preencha "resumo_anotacao" com 1-2 frases resumindo o que há de NOVO nesta conv
 - É um registro interno para a equipe; seja objetiva.
 
 ════════════════════════════════
+ANÁLISE COGNITIVA INTERNA (campo "analise")
+════════════════════════════════
+Preencha "analise" com sua leitura interna do lead: intenção (ex.: pedido de preço, troca de escola), emoção predominante (ex.: medo, insegurança, pressa, confiança), temperatura ("frio", "morno", "quente" ou "pronto_visita"), e um score de 1 a 5 para interesse, urgencia e probabilidade de matrícula, além da próxima melhor ação. É CONTEXTO INTERNO do CRM — NUNCA apareça para a família nem no campo "resposta".
+
+════════════════════════════════
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
 ════════════════════════════════
 {
@@ -256,7 +272,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "motivo_transbordo": "texto ou null",
   "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,
   "sugerir_matricula": false,
-  "resumo_anotacao": "1-2 frases com datas absolutas ou null"
+  "resumo_anotacao": "1-2 frases com datas absolutas ou null",
+  "analise": { "intencao": "texto", "emocao": "texto", "temperatura": "frio|morno|quente|pronto_visita", "interesse": 3, "urgencia": 3, "probabilidade": 3, "proxima_acao": "texto" }
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -306,6 +323,17 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
           : null,
       sugerir_matricula: parsed.sugerir_matricula === true,
       resumo_anotacao: parsed.resumo_anotacao ?? null,
+      analise: parsed.analise
+        ? {
+            intencao: parsed.analise.intencao ?? null,
+            emocao: parsed.analise.emocao ?? null,
+            temperatura: parsed.analise.temperatura ?? null,
+            interesse: typeof parsed.analise.interesse === 'number' ? parsed.analise.interesse : null,
+            urgencia: typeof parsed.analise.urgencia === 'number' ? parsed.analise.urgencia : null,
+            probabilidade: typeof parsed.analise.probabilidade === 'number' ? parsed.analise.probabilidade : null,
+            proxima_acao: parsed.analise.proxima_acao ?? null,
+          }
+        : null,
     }
   } catch {
     return {
@@ -319,6 +347,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
       agendar_visita: null,
       sugerir_matricula: false,
       resumo_anotacao: null,
+      analise: null,
     }
   }
 }

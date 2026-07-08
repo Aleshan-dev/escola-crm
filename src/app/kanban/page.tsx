@@ -264,6 +264,14 @@ function CardLead({
             🎓 Sugere matrícula
           </span>
         )}
+        {lead.cog_temperatura === 'pronto_visita' && (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold"
+            title="Leitura da Sara: pronto para visita"
+          >
+            ⭐ Pronto p/ visita
+          </span>
+        )}
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium inline-flex items-center gap-1 ${diasColor}`}>
           <Clock className="w-2.5 h-2.5" />
           {dias === 0 ? 'hoje' : `${dias}d`}

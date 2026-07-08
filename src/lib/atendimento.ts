@@ -204,6 +204,21 @@ export async function processarMensagemRecebida(
         if (i < baloes.length - 1) await sleep(900)
       }
 
+      // Análise cognitiva (5.1): grava o snapshot no lead (contexto interno do CRM).
+      if (saraResult.analise) {
+        const a = saraResult.analise
+        await supabase.from('leads').update({
+          cog_intencao: a.intencao,
+          cog_emocao: a.emocao,
+          cog_temperatura: a.temperatura,
+          cog_interesse: a.interesse,
+          cog_urgencia: a.urgencia,
+          cog_probabilidade: a.probabilidade,
+          cog_proxima_acao: a.proxima_acao,
+          cog_atualizado_em: new Date().toISOString(),
+        }).eq('id', lead.id)
+      }
+
       // Dados da família extraídos
       if (saraResult.familia_dados) {
         const fd = saraResult.familia_dados

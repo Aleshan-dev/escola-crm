@@ -236,6 +236,25 @@ export function LeadDetailModal({
             {lead.crianca?.idade != null && <div className="flex items-center gap-2 text-slate-700"><Baby className="w-4 h-4 text-slate-400" />{lead.crianca.idade} anos</div>}
           </div>
 
+          {(lead.cog_intencao || lead.cog_temperatura || lead.cog_proxima_acao) && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-indigo-900">
+                <Bot className="w-4 h-4" /> Leitura da Sara
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-700">
+                {lead.cog_intencao && <div><span className="text-slate-400">Intenção:</span> {lead.cog_intencao}</div>}
+                {lead.cog_emocao && <div><span className="text-slate-400">Emoção:</span> {lead.cog_emocao}</div>}
+                {lead.cog_temperatura && <div><span className="text-slate-400">Temperatura:</span> {lead.cog_temperatura}</div>}
+                {(lead.cog_interesse != null || lead.cog_urgencia != null || lead.cog_probabilidade != null) && (
+                  <div><span className="text-slate-400">Score:</span> Int {lead.cog_interesse ?? '–'} · Urg {lead.cog_urgencia ?? '–'} · Prob {lead.cog_probabilidade ?? '–'}</div>
+                )}
+              </div>
+              {lead.cog_proxima_acao && (
+                <div className="mt-1.5 text-xs text-slate-700"><span className="text-slate-400">Próxima ação:</span> {lead.cog_proxima_acao}</div>
+              )}
+            </div>
+          )}
+
           <div>
             <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><CheckSquare className="w-4 h-4 text-slate-400" />Tarefas</div>
             <div className="space-y-2 mb-3">
