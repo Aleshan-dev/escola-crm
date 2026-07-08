@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { evolutionSendText } from '@/lib/evolution'
+import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 import { gerarRespostaSara } from '@/lib/sara'
 import {
   dentroHorarioComercial,
@@ -207,13 +207,13 @@ export async function GET(req: NextRequest) {
         promptPorTrigger(trigger, lead.familia!.nome_responsavel, count + 1)
       )
       texto = saraResult.resposta
-      const sent = await evolutionSendText(tel, texto)
+      const wid = await enviarTextoWhatsApp(tel, texto)
       enviado = true
       await supabase.from('mensagens').insert({
         lead_id: lead.id,
         direcao: 'out_ia',
         conteudo: texto,
-        whatsapp_message_id: sent?.key?.id || null,
+        whatsapp_message_id: wid,
       })
     } catch (e) {
       erro = e instanceof Error ? e.message : 'erro desconhecido'

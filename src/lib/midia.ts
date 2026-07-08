@@ -43,7 +43,7 @@ async function baixarMidiaBase64(data: EvolutionData): Promise<{ base64: string;
   }
 }
 
-async function transcreverAudio(base64: string, mimetype: string): Promise<string | null> {
+export async function transcreverAudio(base64: string, mimetype: string): Promise<string | null> {
   try {
     const buffer = Buffer.from(base64, 'base64')
     const ext = mimetype.includes('mp4') || mimetype.includes('m4a')
@@ -64,7 +64,7 @@ async function transcreverAudio(base64: string, mimetype: string): Promise<strin
   }
 }
 
-async function descreverImagem(base64: string, mimetype: string): Promise<string | null> {
+export async function descreverImagem(base64: string, mimetype: string): Promise<string | null> {
   try {
     const dataUrl = `data:${mimetype || 'image/jpeg'};base64,${base64}`
     const resp = await getOpenAI().chat.completions.create({
@@ -93,7 +93,28 @@ async function descreverImagem(base64: string, mimetype: string): Promise<string
 }
 
 /**
- * Se a mensagem for áudio ou imagem, devolve um texto que a representa para a Sara.
+ * Interpreta uma mídia já baixada (base64) e devolve um texto para a Sara.
+ * Usado pelos dois canais (Evolution e Cloud).
+ */
+export async function interpretarMidia(
+  tipo: 'audio' | 'imagem',
+  base64: string,
+  mimetype: string,
+  caption?: string
+): Promise<string> {
+  if (tipo === 'audio') {
+    const texto = await transcreverAudio(base64, mimetype)
+    return texto || '[O responsável enviou um áudio que não consegui transcrever. Peça, com gentileza, que repita por texto.]'
+  }
+  const desc = await descreverImagem(base64, mimetype)
+  const corpo = desc
+    ? `[O responsável enviou uma imagem. Conteúdo: ${desc}]`
+    : '[O responsável enviou uma imagem que não consegui interpretar.]'
+  return caption ? `${caption}\n${corpo}` : corpo
+}
+
+/**
+ * (Evolution) Se a mensagem for áudio ou imagem, devolve um texto que a representa.
  * Retorna null quando não é mídia tratável (o fluxo de texto segue normalmente).
  */
 export async function extrairConteudoMidia(data: EvolutionData): Promise<string | null> {
@@ -109,15 +130,10 @@ export async function extrairConteudoMidia(data: EvolutionData): Promise<string 
       : '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que ele reenvie ou descreva por texto.]'
   }
 
-  if (temAudio) {
-    const texto = await transcreverAudio(midia.base64, midia.mimetype)
-    return texto || '[O responsável enviou um áudio que não consegui transcrever. Peça, com gentileza, que repita por texto.]'
-  }
-
-  const caption: string = msg.imageMessage?.caption || ''
-  const desc = await descreverImagem(midia.base64, midia.mimetype)
-  const corpo = desc
-    ? `[O responsável enviou uma imagem. Conteúdo: ${desc}]`
-    : '[O responsável enviou uma imagem que não consegui interpretar.]'
-  return caption ? `${caption}\n${corpo}` : corpo
+  return interpretarMidia(
+    temAudio ? 'audio' : 'imagem',
+    midia.base64,
+    midia.mimetype,
+    msg.imageMessage?.caption || undefined
+  )
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase-server'
-import { evolutionSendText } from '@/lib/evolution'
+import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 import { gerarRespostaSara } from '@/lib/sara'
 
 // Faz a Sara responder AGORA a última mensagem do lead (continuar de onde parou),
@@ -27,8 +27,7 @@ export async function POST(req: NextRequest) {
     const sara = await gerarRespostaSara(lead_id)
     if (!sara.resposta?.trim()) return NextResponse.json({ error: 'Sara não gerou resposta' }, { status: 500 })
 
-    const result = await evolutionSendText(lead.familia.telefone, sara.resposta)
-    const wid = result?.key?.id || null
+    const wid = await enviarTextoWhatsApp(lead.familia.telefone, sara.resposta)
 
     await supabase.from('mensagens').insert({
       lead_id,

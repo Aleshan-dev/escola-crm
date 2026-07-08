@@ -23,3 +23,51 @@ export async function enviarTextoCloud(to: string, texto: string) {
 export async function enviarTextoCloudConta(phoneId: string, token: string, to: string, texto: string) {
   return postMessage(phoneId, token, to, texto)
 }
+
+// Baixa mídia da Cloud API (2 passos: metadata -> URL binária). Retorna base64 + mimetype.
+export async function baixarMidiaCloud(
+  mediaId: string,
+  token: string
+): Promise<{ base64: string; mimetype: string } | null> {
+  try {
+    const meta = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!meta.ok) {
+      console.error('[cloud-midia] metadata falhou:', meta.status, await meta.text())
+      return null
+    }
+    const metaJson = await meta.json()
+    const url: string | undefined = metaJson?.url
+    const mimetype: string = metaJson?.mime_type || ''
+    if (!url) return null
+    const bin = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    if (!bin.ok) {
+      console.error('[cloud-midia] download falhou:', bin.status)
+      return null
+    }
+    const buf = Buffer.from(await bin.arrayBuffer())
+    return { base64: buf.toString('base64'), mimetype }
+  } catch (e) {
+    console.error('[cloud-midia] erro:', e)
+    return null
+  }
+}
+
+// Envio unificado: usa a conta Cloud ativa (banco) ou o env como fallback.
+// Retorna o id da mensagem (wid) ou null. Ponto único de saída do WhatsApp.
+export async function enviarTextoWhatsApp(to: string, texto: string): Promise<string | null> {
+  const { createServerAdminClient } = await import('@/lib/supabase-server')
+  const supabase = createServerAdminClient()
+  const { data: conta } = await supabase
+    .from('whatsapp_contas')
+    .select('phone_number_id, token')
+    .eq('ativo', true)
+    .order('criado_em', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ phone_number_id: string; token: string }>()
+  const sent = conta?.token
+    ? await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
+    : await enviarTextoCloud(to, texto)
+  return sent?.messages?.[0]?.id || null
+}

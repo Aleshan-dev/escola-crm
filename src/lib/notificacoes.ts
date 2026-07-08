@@ -1,5 +1,5 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { evolutionSendText } from '@/lib/evolution'
+import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 
 // Notificações proativas para o WhatsApp do gestor (telefone_transbordo em config_ia).
 // Cada tipo tem uma flag liga/desliga; transbordo é sempre enviado (crítico).
@@ -31,7 +31,7 @@ export async function notificarGestor(
     const flag = FLAG_POR_TIPO[tipo]
     if (flag && cfg && (cfg as Record<string, unknown>)[flag] === false) return
 
-    await evolutionSendText(tel, mensagem)
+    await enviarTextoWhatsApp(tel, mensagem)
   } catch (e) {
     console.error('Falha ao notificar o gestor:', e)
   }

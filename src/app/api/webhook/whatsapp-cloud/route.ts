@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoCloud, enviarTextoCloudConta } from '@/lib/whatsapp-cloud'
+import { enviarTextoCloud, enviarTextoCloudConta, baixarMidiaCloud } from '@/lib/whatsapp-cloud'
+import { interpretarMidia } from '@/lib/midia'
 import { registrarAlerta } from '@/lib/alertas'
 import { processarMensagemRecebida, type EnviarTexto } from '@/lib/atendimento'
+
+// Folga para baixar mídia + transcrever/descrever antes de responder.
+export const maxDuration = 30
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
@@ -28,12 +32,30 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
 
     const msg = value?.messages?.[0]
-    if (!msg || msg.type !== 'text') return NextResponse.json({ ignored: true })
+    if (!msg) return NextResponse.json({ ignored: true })
 
     const telefone: string = msg.from
-    const conteudo: string = msg.text?.body || ''
     const pushName: string = value?.contacts?.[0]?.profile?.name || 'Família'
     const wid: string = msg.id || ''
+    const token: string = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN || ''
+
+    // Texto, áudio (transcrição) ou imagem (visão). Outros tipos são ignorados.
+    let conteudo = ''
+    if (msg.type === 'text') {
+      conteudo = msg.text?.body || ''
+    } else if (msg.type === 'audio' && msg.audio?.id && token) {
+      const m = await baixarMidiaCloud(msg.audio.id, token)
+      conteudo = m
+        ? await interpretarMidia('audio', m.base64, m.mimetype)
+        : '[O responsável enviou um áudio, mas não consegui baixá-lo. Peça, com gentileza, que repita por texto.]'
+    } else if (msg.type === 'image' && msg.image?.id && token) {
+      const m = await baixarMidiaCloud(msg.image.id, token)
+      conteudo = m
+        ? await interpretarMidia('imagem', m.base64, m.mimetype, msg.image?.caption)
+        : '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que reenvie ou descreva por texto.]'
+    } else {
+      return NextResponse.json({ ignored: `tipo ${msg.type}` })
+    }
 
     // Envio pelo canal Cloud (conta específica ou fallback do env)
     const enviarCloud: EnviarTexto = async (tel, txt) => {

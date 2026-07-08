@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase-server'
-import { evolutionSendText } from '@/lib/evolution'
+import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
@@ -20,8 +20,7 @@ export async function POST(req: NextRequest) {
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
 
   try {
-    const result = await evolutionSendText(lead.familia.telefone, texto)
-    const wid = result?.key?.id || null
+    const wid = await enviarTextoWhatsApp(lead.familia.telefone, texto)
 
     // Salva mensagem
     await supabase.from('mensagens').insert({

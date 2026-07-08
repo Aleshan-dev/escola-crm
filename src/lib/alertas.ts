@@ -1,5 +1,5 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { evolutionSendText } from '@/lib/evolution'
+import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 
 // Observabilidade: registra falhas do sistema e notifica o admin no WhatsApp,
 // com rate limit para não virar spam (nem gatilho de bloqueio).
@@ -37,7 +37,7 @@ export async function registrarAlerta(
     const tel = cfg?.telefone_transbordo
     if (!tel) return
 
-    await evolutionSendText(
+    await enviarTextoWhatsApp(
       tel,
       `🚨 *Alerta do sistema*\nContexto: ${contexto}\n${mensagem.slice(0, 300)}\n\nVerifique o CRM.`
     )
