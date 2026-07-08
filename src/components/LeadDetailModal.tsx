@@ -49,6 +49,27 @@ export function LeadDetailModal({
   const [novaAnotacao, setNovaAnotacao] = useState('')
   const [salvandoAnot, setSalvandoAnot] = useState(false)
 
+  const [saraLoading, setSaraLoading] = useState(false)
+  const [saraMsg, setSaraMsg] = useState<string | null>(null)
+
+  async function saraResponder() {
+    if (saraLoading) return
+    setSaraLoading(true); setSaraMsg(null)
+    try {
+      const r = await fetch('/api/sara/responder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: lead.id }),
+      })
+      const j = await r.json()
+      setSaraMsg(j?.ok ? 'Sara respondeu ✓' : `Falha: ${j?.error || 'erro'}`)
+    } catch {
+      setSaraMsg('Falha ao acionar a Sara.')
+    } finally {
+      setSaraLoading(false)
+    }
+  }
+
   async function carregarTarefas() {
     const { data } = await supabase
       .from('tarefas')
@@ -281,6 +302,19 @@ export function LeadDetailModal({
         </div>
 
         <div className="border-t border-slate-100 p-4 space-y-2">
+          {lead.ia_ativa && (
+            <>
+              <button
+                onClick={saraResponder}
+                disabled={saraLoading}
+                className="flex items-center justify-center gap-2 w-full rounded-lg bg-green-600 text-white text-sm font-medium py-2.5 hover:bg-green-700 disabled:opacity-60"
+              >
+                <Bot className="w-4 h-4" />
+                {saraLoading ? 'Sara respondendo...' : 'Sara responder agora'}
+              </button>
+              {saraMsg && <p className="text-center text-xs text-slate-600">{saraMsg}</p>}
+            </>
+          )}
           <Link href={`/chat?lead=${lead.id}`} className="flex items-center justify-center gap-2 w-full rounded-lg bg-blue-600 text-white text-sm font-medium py-2.5 hover:bg-blue-700">
             <MessageSquare className="w-4 h-4" />
             Abrir conversa
