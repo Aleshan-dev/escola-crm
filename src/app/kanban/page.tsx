@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import { LeadDetailModal } from '@/components/LeadDetailModal'
 import { NewLeadModal } from '@/components/NewLeadModal'
+import { ChatPopup } from '@/components/ChatPopup'
 import type { Coluna, Lead } from '@/lib/types'
 import {
   DndContext,
@@ -34,6 +35,7 @@ export default function KanbanPage() {
   const [busca, setBusca] = useState('')
   const [detalhe, setDetalhe] = useState<Lead | null>(null)
   const [novoLead, setNovoLead] = useState(false)
+  const [chatLead, setChatLead] = useState<Lead | null>(null)
 
   async function load() {
     setLoading(true)
@@ -138,6 +140,7 @@ export default function KanbanPage() {
                     coluna={col}
                     leads={leadsFiltrados.filter((l) => l.coluna_id === col.id)}
                     onOpen={setDetalhe}
+                    onChat={setChatLead}
                   />
                 ))}
               </div>
@@ -163,6 +166,7 @@ export default function KanbanPage() {
         />
       )}
       {novoLead && <NewLeadModal colunas={colunas} onClose={() => setNovoLead(false)} onCreated={load} />}
+      {chatLead && <ChatPopup lead={chatLead} onClose={() => setChatLead(null)} />}
     </div>
   )
 }
@@ -171,10 +175,12 @@ function ColunaView({
   coluna,
   leads,
   onOpen,
+  onChat,
 }: {
   coluna: Coluna
   leads: Lead[]
   onOpen: (lead: Lead) => void
+  onChat: (lead: Lead) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: coluna.id })
   return (
@@ -197,7 +203,7 @@ function ColunaView({
       </div>
       <div className="space-y-2">
         {leads.map((lead) => (
-          <CardLead key={lead.id} lead={lead} onOpen={onOpen} />
+          <CardLead key={lead.id} lead={lead} onOpen={onOpen} onChat={onChat} />
         ))}
         {leads.length === 0 && (
           <div className="text-center text-xs text-slate-400 py-6 border border-dashed border-slate-300 rounded-lg">
@@ -213,10 +219,12 @@ function CardLead({
   lead,
   dragging,
   onOpen,
+  onChat,
 }: {
   lead: Lead
   dragging?: boolean
   onOpen?: (lead: Lead) => void
+  onChat?: (lead: Lead) => void
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: lead.id })
 
@@ -311,14 +319,15 @@ function CardLead({
           />
         </div>
         <span className="text-[10px] text-slate-500 font-medium">{lead.score}</span>
-        <Link
-          href={`/chat?lead=${lead.id}`}
+        <button
+          type="button"
+          title="Abrir chat"
           className="text-slate-400 hover:text-blue-600"
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onChat?.(lead) }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <MessageSquare className="w-3.5 h-3.5" />
-        </Link>
+        </button>
       </div>
     </div>
   )
