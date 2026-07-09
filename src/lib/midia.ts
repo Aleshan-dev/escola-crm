@@ -23,7 +23,7 @@ type EvolutionData = {
 // Baixa a mídia da mensagem como base64 via Evolution.
 async function baixarMidiaBase64(data: EvolutionData): Promise<{ base64: string; mimetype: string } | null> {
   try {
-    const r = await fetch(`${URL}/chat/getBase64FromMediaMessage/${INSTANCE}`, {
+    const r = await fetch(`${URL}/chat/getBase64FromMediaMessage/${encodeURIComponent(INSTANCE)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: KEY },
       body: JSON.stringify({ message: { key: data.key }, convertToMp4: false }),

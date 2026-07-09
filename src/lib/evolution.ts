@@ -3,7 +3,7 @@ const KEY = process.env.EVOLUTION_API_KEY!
 const INSTANCE = process.env.EVOLUTION_INSTANCE_NAME!
 
 export async function evolutionSendText(numero: string, texto: string) {
-  const r = await fetch(`${URL}/message/sendText/${INSTANCE}`, {
+  const r = await fetch(`${URL}/message/sendText/${encodeURIComponent(INSTANCE)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: KEY },
     body: JSON.stringify({
