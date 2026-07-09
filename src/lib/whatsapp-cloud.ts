@@ -56,16 +56,38 @@ export async function baixarMidiaCloud(
 
 // Envio unificado: usa a conta Cloud ativa (banco) ou o env como fallback.
 // Retorna o id da mensagem (wid) ou null. Ponto único de saída do WhatsApp.
-export async function enviarTextoWhatsApp(to: string, texto: string): Promise<string | null> {
+export async function enviarTextoWhatsApp(
+  to: string,
+  texto: string,
+  phoneId?: string | null,
+): Promise<string | null> {
   const { createServerAdminClient } = await import('@/lib/supabase-server')
   const supabase = createServerAdminClient()
-  const { data: conta } = await supabase
-    .from('whatsapp_contas')
-    .select('phone_number_id, token')
-    .eq('ativo', true)
-    .order('criado_em', { ascending: false })
-    .limit(1)
-    .maybeSingle<{ phone_number_id: string; token: string }>()
+  type Conta = { phone_number_id: string; token: string }
+  let conta: Conta | null = null
+
+  // Prioriza a conta do número pelo qual o lead chegou (multi-número).
+  if (phoneId) {
+    const { data } = await supabase
+      .from('whatsapp_contas')
+      .select('phone_number_id, token')
+      .eq('phone_number_id', phoneId)
+      .eq('ativo', true)
+      .maybeSingle<Conta>()
+    conta = data
+  }
+  // Fallback: conta ativa mais recente (ou env dentro de enviarTextoCloud).
+  if (!conta) {
+    const { data } = await supabase
+      .from('whatsapp_contas')
+      .select('phone_number_id, token')
+      .eq('ativo', true)
+      .order('criado_em', { ascending: false })
+      .limit(1)
+      .maybeSingle<Conta>()
+    conta = data
+  }
+
   const sent = conta?.token
     ? await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
     : await enviarTextoCloud(to, texto)

@@ -19,9 +19,9 @@ export async function POST(req: NextRequest) {
 
   const { data: lead } = await supabase
     .from('leads')
-    .select('familia:familias(telefone)')
+    .select('familia:familias(telefone, whatsapp_phone_number_id)')
     .eq('id', lead_id)
-    .single<{ familia: { telefone: string } }>()
+    .single<{ familia: { telefone: string; whatsapp_phone_number_id: string | null } }>()
 
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
     const baloes = dividirEmBaloes(sara.resposta)
     for (let i = 0; i < baloes.length; i++) {
-      const wid = await enviarTextoWhatsApp(lead.familia.telefone, baloes[i])
+      const wid = await enviarTextoWhatsApp(lead.familia.telefone, baloes[i], lead.familia.whatsapp_phone_number_id)
       await supabase.from('mensagens').insert({
         lead_id,
         direcao: 'out_ia',

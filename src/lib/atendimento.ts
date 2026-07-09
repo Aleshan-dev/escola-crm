@@ -106,9 +106,10 @@ export async function processarMensagemRecebida(
     canal?: string // 'meta-ads' | 'organico' ... (atribuição first-touch)
     campanha?: string | null
     referral?: unknown // payload bruto do anúncio, para auditoria
+    phoneNumberId?: string | null // número oficial da escola que recebeu a mensagem
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId } = params
 
   let { data: familia } = await supabase
     .from('familias')
@@ -132,6 +133,12 @@ export async function processarMensagemRecebida(
     familia = ins.data
   }
   if (!familia) throw new Error('Falha ao criar família')
+
+  // Registra por qual número oficial da escola este contato chegou, para os
+  // disparos (follow-up, botão, etc.) responderem pelo mesmo número.
+  if (phoneNumberId) {
+    await supabase.from('familias').update({ whatsapp_phone_number_id: phoneNumberId }).eq('id', familia.id)
+  }
 
   let { data: lead } = await supabase
     .from('leads')

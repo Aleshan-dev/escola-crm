@@ -13,14 +13,14 @@ export async function POST(req: NextRequest) {
   // Pega telefone do lead
   const { data: lead } = await supabase
     .from('leads')
-    .select('familia:familias(telefone)')
+    .select('familia:familias(telefone, whatsapp_phone_number_id)')
     .eq('id', lead_id)
-    .single<{ familia: { telefone: string } }>()
+    .single<{ familia: { telefone: string; whatsapp_phone_number_id: string | null } }>()
 
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
 
   try {
-    const wid = await enviarTextoWhatsApp(lead.familia.telefone, texto)
+    const wid = await enviarTextoWhatsApp(lead.familia.telefone, texto, lead.familia.whatsapp_phone_number_id)
 
     // Salva mensagem
     await supabase.from('mensagens').insert({

@@ -35,7 +35,7 @@ type LeadRow = {
   followup_count: number
   ultimo_followup_em: string | null
   followup_status: string
-  familia: { telefone: string; nome_responsavel: string } | null
+  familia: { telefone: string; nome_responsavel: string; whatsapp_phone_number_id: string | null } | null
   coluna: {
     nome: string
     ordem: number
@@ -140,7 +140,7 @@ export async function GET(req: NextRequest) {
     .select(
       `id, coluna_id, familia_id, ultima_interacao_em, entrou_coluna_em, data_proxima_acao,
        followup_count, ultimo_followup_em, followup_status,
-       familia:familias(telefone, nome_responsavel),
+       familia:familias(telefone, nome_responsavel, whatsapp_phone_number_id),
        coluna:colunas(nome, ordem, followup_intervalo_horas, followup_max)`
     )
     .eq('ia_ativa', true)
@@ -210,7 +210,7 @@ export async function GET(req: NextRequest) {
       texto = saraResult.resposta
       const baloes = dividirEmBaloes(texto)
       for (let i = 0; i < baloes.length; i++) {
-        const wid = await enviarTextoWhatsApp(tel, baloes[i])
+        const wid = await enviarTextoWhatsApp(tel, baloes[i], lead.familia?.whatsapp_phone_number_id)
         await supabase.from('mensagens').insert({
           lead_id: lead.id,
           direcao: 'out_ia',

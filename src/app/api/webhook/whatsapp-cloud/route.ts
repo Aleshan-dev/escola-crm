@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
       canal: ref ? 'meta-ads' : 'organico',
       campanha: ref ? ref.headline || ref.source_id || null : null,
       referral: ref || null,
+      phoneNumberId,
     })
 
     return NextResponse.json({ ok: true })
