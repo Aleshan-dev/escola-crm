@@ -11,6 +11,17 @@ import { Topbar } from '@/components/Topbar'
 import type { Lead, Mensagem } from '@/lib/types'
 import { Bot, Send, Loader2, User, RefreshCw } from 'lucide-react'
 
+// Rótulo do separador de data (estilo WhatsApp): Hoje / Ontem / DD/MM/AAAA
+function labelData(iso: string): string {
+  const d = new Date(iso)
+  const hoje = new Date()
+  const ontem = new Date()
+  ontem.setDate(hoje.getDate() - 1)
+  if (d.toDateString() === hoje.toDateString()) return 'Hoje'
+  if (d.toDateString() === ontem.toDateString()) return 'Ontem'
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
 function ChatPageInner() {
   const supabase = createClient()
   const searchParams = useSearchParams()
@@ -109,7 +120,7 @@ function ChatPageInner() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       <Topbar />
 
       <div className="flex-1 flex overflow-hidden">
@@ -175,15 +186,26 @@ function ChatPageInner() {
               </div>
 
               <div ref={msgsRef} className="flex-1 overflow-y-auto p-4 space-y-2 bg-slate-50">
-                {mensagens.map((m) => {
+                {mensagens.map((m, i) => {
                   const isIn = m.direcao === 'in'
                   const isIA = m.direcao === 'out_ia'
+                  const prev = mensagens[i - 1]
+                  const mudouDia = !prev || new Date(prev.criado_em).toDateString() !== new Date(m.criado_em).toDateString()
                   return (
-                    <div key={m.id} className={`flex ${isIn ? 'justify-start' : 'justify-end'}`}>
-                      <div className={`max-w-[70%] px-3 py-2 rounded-2xl text-sm ${isIn ? 'bg-white border border-slate-200 rounded-bl-md' : isIA ? 'bg-green-100 text-green-900 rounded-br-md' : 'bg-blue-100 text-blue-900 rounded-br-md'}`}>
-                        {m.conteudo}
-                        <div className={`text-[10px] mt-1 ${isIn ? 'text-slate-400' : isIA ? 'text-green-700/70' : 'text-blue-700/70'}`}>
-                          {isIA ? 'Sara IA' : isIn ? 'Família' : 'Equipe'} · {new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    <div key={m.id}>
+                      {mudouDia && (
+                        <div className="flex justify-center my-3">
+                          <span className="text-[10px] font-medium text-slate-500 bg-slate-200/70 rounded-full px-3 py-1">
+                            {labelData(m.criado_em)}
+                          </span>
+                        </div>
+                      )}
+                      <div className={`flex ${isIn ? 'justify-start' : 'justify-end'}`}>
+                        <div className={`max-w-[70%] px-3 py-2 rounded-2xl text-sm ${isIn ? 'bg-white border border-slate-200 rounded-bl-md' : isIA ? 'bg-green-100 text-green-900 rounded-br-md' : 'bg-blue-100 text-blue-900 rounded-br-md'}`}>
+                          {m.conteudo}
+                          <div className={`text-[10px] mt-1 ${isIn ? 'text-slate-400' : isIA ? 'text-green-700/70' : 'text-blue-700/70'}`}>
+                            {isIA ? 'Sara IA' : isIn ? 'Família' : 'Equipe'} · {new Date(m.criado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} {new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
                         </div>
                       </div>
                     </div>
