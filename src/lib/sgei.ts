@@ -139,6 +139,28 @@ export async function identificarResponsavel(telefone: string): Promise<Responsa
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _ocupCache: { at: number; data: any } | null = null
 const OCUP_TTL_MS = 3 * 60 * 1000
+
+// Ocupação/vagas por turma via LEITURA DIRETA (view get_ocupacao), usada para
+// alimentar a Sara. Não depende da Edge Function (usa as mesmas envs já ativas).
+export type OcupacaoTurma = { turma: string; capacidade: number; matriculados: number; vagas: number }
+let _ocupDiretaCache: { at: number; data: OcupacaoTurma[] } | null = null
+export async function getOcupacaoDireta(): Promise<OcupacaoTurma[] | null> {
+  if (!sgeiConfigurado()) return null
+  if (_ocupDiretaCache && Date.now() - _ocupDiretaCache.at < OCUP_TTL_MS) return _ocupDiretaCache.data
+  try {
+    const sgei = createSgeiClient()
+    const { data, error } = await sgei
+      .from('get_ocupacao')
+      .select('turma, capacidade, matriculados, vagas')
+      .order('turma')
+    if (error || !data) return _ocupDiretaCache?.data ?? null
+    _ocupDiretaCache = { at: Date.now(), data: data as OcupacaoTurma[] }
+    return data as OcupacaoTurma[]
+  } catch (e) {
+    console.error('[sgei] getOcupacaoDireta falhou:', e instanceof Error ? e.message : e)
+    return _ocupDiretaCache?.data ?? null
+  }
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getOcupacao(): Promise<any | null> {
   if (_ocupCache && Date.now() - _ocupCache.at < OCUP_TTL_MS) return _ocupCache.data

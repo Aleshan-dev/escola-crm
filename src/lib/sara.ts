@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
+import { getOcupacaoDireta } from '@/lib/sgei'
 
 let _openai: OpenAI | null = null
 function getOpenAI(): OpenAI {
@@ -204,6 +205,19 @@ Não há horários de visita disponíveis no momento. Se a família quiser agend
   // Data de hoje no fuso de Rio Branco/Acre (UTC-5) — para a Sara escrever datas absolutas.
   const hojeAcre = new Date(Date.now() - 5 * 60 * 60 * 1000).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
 
+  // Vagas por turma em tempo real (sistema acadêmico SGEI). Falha silenciosa:
+  // se indisponível, a Sara segue sem o bloco (não quebra o atendimento).
+  const ocupacao = await getOcupacaoDireta().catch(() => null)
+  const blocoVagas =
+    ocupacao && ocupacao.length
+      ? `
+════════════════════════════════
+VAGAS POR TURMA — DADO REAL E ATUAL (fonte: sistema acadêmico)
+════════════════════════════════
+Ao falar de disponibilidade, use SOMENTE estes números. NUNCA ofereça turma sem vaga: se estiver lotada, diga que no momento está sem vagas e ofereça lista de espera ou uma turma próxima que tenha vaga.
+${ocupacao.map((o) => `- ${o.turma}: ${o.vagas > 0 ? `${o.vagas} vaga(s) disponível(is)` : 'SEM vagas (turma lotada)'} — ${o.matriculados}/${o.capacidade} matriculados`).join('\n')}`
+      : ''
+
   const systemPrompt = `${config?.system_prompt || 'Você é Sara, consultora de matrículas do Colégio Pequenos Guardiões.'}
 
 Hoje é ${hojeAcre} (horário de Rio Branco/Acre).
@@ -221,6 +235,7 @@ REGRA ANTI-ALUCINAÇÃO — CRÍTICA
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
 - O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
 ${blocoConfig}
+${blocoVagas}
 
 ════════════════════════════════
 DADOS JÁ COLETADOS DESTA FAMÍLIA

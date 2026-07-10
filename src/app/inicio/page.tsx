@@ -26,7 +26,6 @@ export default function InicioPage() {
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
   const [nomeUser, setNomeUser] = useState('')
-  const [funis, setFunis] = useState<{ id: string; nome: string }[]>([])
   const [funilSel, setFunilSel] = useState('')
   const [colunas, setColunas] = useState<any[]>([])
   const [leads, setLeads] = useState<any[]>([])
@@ -44,7 +43,7 @@ export default function InicioPage() {
       const email = u?.user?.email || ''
       setNomeUser(email ? email.split('@')[0] : '')
       const [fr, cr, lr, tr, mr, ur] = await Promise.all([
-        supabase.from('funis').select('id, nome').order('criado_em'),
+        supabase.from('funis').select('id, nome, is_padrao').order('criado_em'),
         supabase.from('colunas').select('id, nome, ordem, funil_id').order('ordem'),
         supabase.from('leads').select('*, crianca:criancas(serie_desejada), familia:familias(canal)').eq('arquivado', false),
         supabase.from('tarefas').select('id, criado_em, lead_id, responsavel_id'),
@@ -52,7 +51,8 @@ export default function InicioPage() {
         supabase.from('usuarios').select('id, nome'),
       ])
       const fs = (fr.data as any[]) || []
-      setFunis(fs); setFunilSel(fs[0]?.id || '')
+      // Dashboard unificado: sempre o funil padrão (captação), sem seletor.
+      setFunilSel(fs.find((f) => f.is_padrao)?.id || fs[0]?.id || '')
       setColunas((cr.data as any[]) || [])
       setLeads((lr.data as any[]) || [])
       setTarefas((tr.data as any[]) || [])
@@ -158,14 +158,6 @@ export default function InicioPage() {
           <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Carregando...</div>
         ) : (
           <div className="space-y-5">
-            <div className="relative max-w-sm">
-              <label className="absolute -top-2 left-3 bg-[#EEF2FF] px-1 text-xs font-medium text-blue-700">Funil</label>
-              <select value={funilSel} onChange={(e) => setFunilSel(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500">
-                {funis.length === 0 && <option value="">Funil de Captação</option>}
-                {funis.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
-              </select>
-            </div>
-
             <div className="flex gap-4 overflow-x-auto pb-1">
               <KpiCard noun="novas matrículas" meta={d.metaMatriculas} realizado={d.matriculasMes} prev={previsao(d.matriculasMes)} pct={pct(previsao(d.matriculasMes), d.metaMatriculas)} total={d.matriculasTotal} />
               <KpiCard noun="novos contatos" meta={d.metaContatos} realizado={d.contatosMes} prev={previsao(d.contatosMes)} pct={pct(previsao(d.contatosMes), d.metaContatos)} total={d.contatosTotal} />
