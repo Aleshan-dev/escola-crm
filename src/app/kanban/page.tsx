@@ -6,6 +6,7 @@ import { Topbar } from '@/components/Topbar'
 import { LeadDetailModal } from '@/components/LeadDetailModal'
 import { NewLeadModal } from '@/components/NewLeadModal'
 import { ChatPopup } from '@/components/ChatPopup'
+import { FunilMatriculados } from '@/components/FunilMatriculados'
 import type { Coluna, Lead } from '@/lib/types'
 import {
   DndContext,
@@ -36,6 +37,7 @@ export default function KanbanPage() {
   const [detalhe, setDetalhe] = useState<Lead | null>(null)
   const [novoLead, setNovoLead] = useState(false)
   const [chatLead, setChatLead] = useState<Lead | null>(null)
+  const [funil, setFunil] = useState<'captacao' | 'matriculados'>('captacao')
 
   async function load() {
     setLoading(true)
@@ -111,21 +113,47 @@ export default function KanbanPage() {
       <Topbar />
 
       <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-white">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-            placeholder="Buscar por responsável, telefone ou criança..."
-            className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-blue-400"
-          />
+        {/* Seletor de funil */}
+        <div className="flex items-center rounded-lg border border-slate-200 p-0.5 bg-slate-50">
+          <button
+            onClick={() => setFunil('captacao')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
+              funil === 'captacao' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Captação
+          </button>
+          <button
+            onClick={() => setFunil('matriculados')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
+              funil === 'matriculados' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Matriculados
+          </button>
         </div>
-        <span className="text-xs text-slate-500">{leadsFiltrados.length} lead(s)</span>
-        <Link href="/arquivados" className="text-xs text-slate-500 hover:text-slate-700 underline">Arquivados</Link>
+
+        {funil === 'captacao' && (
+          <>
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                placeholder="Buscar por responsável, telefone ou criança..."
+                className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-blue-400"
+              />
+            </div>
+            <span className="text-xs text-slate-500">{leadsFiltrados.length} lead(s)</span>
+            <Link href="/arquivados" className="text-xs text-slate-500 hover:text-slate-700 underline">Arquivados</Link>
+          </>
+        )}
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {loading ? (
+        {funil === 'matriculados' ? (
+          <FunilMatriculados />
+        ) : loading ? (
           <div className="flex items-center justify-center h-96 text-slate-500">
             <Loader2 className="w-5 h-5 animate-spin mr-2" />
             Carregando funil...
@@ -150,13 +178,15 @@ export default function KanbanPage() {
         )}
       </div>
 
-      <button
-        onClick={() => setNovoLead(true)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-medium text-white shadow-lg hover:bg-blue-700"
-      >
-        <Plus className="w-5 h-5" />
-        Novo lead
-      </button>
+      {funil === 'captacao' && (
+        <button
+          onClick={() => setNovoLead(true)}
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-medium text-white shadow-lg hover:bg-blue-700"
+        >
+          <Plus className="w-5 h-5" />
+          Novo lead
+        </button>
+      )}
 
       {detalhe && (
         <LeadDetailModal

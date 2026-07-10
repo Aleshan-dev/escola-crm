@@ -13,7 +13,7 @@ export async function GET() {
     const sgei = createSgeiClient()
     const [turmasRes, alunosRes, vinculosRes, respRes] = await Promise.all([
       sgei.from('turmas').select('id, nome, curso, capacidade, faixa_etaria').order('nome'),
-      sgei.from('alunos').select('id, nome, celular, turma_id, turno, status'),
+      sgei.from('alunos').select('id, nome, celular, turma_id, turno, status').eq('status', 'ativo'),
       sgei.from('aluno_responsavel').select('aluno_id, responsavel_id'),
       sgei.from('responsaveis').select('id, nome, celular, responsavel_financeiro'),
     ])
