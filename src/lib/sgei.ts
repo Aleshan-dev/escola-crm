@@ -67,18 +67,42 @@ export type ResponsavelSgei = {
   aluno_nome?: string | null
 }
 
+// Normaliza um celular BR para 11 dígitos (DDD + 9 + 8). Reconstrói o 9º dígito
+// quando o WhatsApp manda o número no formato antigo (sem o 9), que é a causa
+// clássica de não casar com o cadastro.
+export function normalizarCelularBR(raw: string): string | null {
+  let d = (raw || '').replace(/\D/g, '')
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2) // tira código do país
+  if (d.length === 10) d = d.slice(0, 2) + '9' + d.slice(2) // DDD + 8 -> insere o 9
+  if (d.length === 11) return d
+  return d.length >= 11 ? d.slice(-11) : null
+}
+
 export async function identificarResponsavel(telefone: string): Promise<ResponsavelSgei | null> {
   if (!sgeiConfigurado()) return null
-  const norm = (telefone || '').replace(/\D/g, '').slice(-11)
-  if (norm.length !== 11) return { ja_responsavel: false }
+  const norm = normalizarCelularBR(telefone)
+  if (!norm) return { ja_responsavel: false }
   try {
     const sgei = createSgeiClient()
-    const { data: resp } = await sgei
+    let { data: resp } = await sgei
       .from('responsaveis')
       .select('id, nome')
       .eq('celular_norm', norm)
       .limit(1)
       .maybeSingle()
+
+    // Fallback: casa pelos últimos 8 dígitos (assinante), aceitando só se for único —
+    // contorna variações residuais de DDD/9º dígito sem risco de falso positivo.
+    if (!resp) {
+      const suf8 = norm.slice(-8)
+      const { data: r2 } = await sgei
+        .from('responsaveis')
+        .select('id, nome')
+        .like('celular_norm', `%${suf8}`)
+        .limit(2)
+      if (r2 && r2.length === 1) resp = r2[0] as any
+    }
+
     if (!resp) return { ja_responsavel: false }
 
     const { data: vinculos } = await sgei
