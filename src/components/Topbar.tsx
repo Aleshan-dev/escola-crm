@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-import { Home, Filter, CalendarDays, Users, MessageSquare, Settings, LogOut, type LucideIcon } from 'lucide-react'
+import { Home, Filter, CalendarDays, Users, MessageSquare, Megaphone, Settings, LogOut, type LucideIcon } from 'lucide-react'
 
 const NAV: { href: string; icon: LucideIcon; label: string }[] = [
   { href: '/inicio', icon: Home, label: 'Início' },
@@ -12,6 +12,7 @@ const NAV: { href: string; icon: LucideIcon; label: string }[] = [
   { href: '/agendamentos', icon: CalendarDays, label: 'Agenda' },
   { href: '/responsaveis', icon: Users, label: 'Responsáveis' },
   { href: '/chat', icon: MessageSquare, label: 'Conversas' },
+  { href: '/comunicacao', icon: Megaphone, label: 'Comunicação com os pais' },
   { href: '/configuracoes', icon: Settings, label: 'Configurações' },
 ]
 
