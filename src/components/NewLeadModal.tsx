@@ -10,10 +10,12 @@ const inputCls =
 
 export function NewLeadModal({
   colunas,
+  escolherColuna = false,
   onClose,
   onCreated,
 }: {
   colunas: Coluna[]
+  escolherColuna?: boolean
   onClose: () => void
   onCreated: () => void
 }) {
@@ -26,7 +28,10 @@ export function NewLeadModal({
   const [saving, setSaving] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
-  const primeiraColuna = [...colunas].sort((a, b) => a.ordem - b.ordem)[0]
+  const colunasOrdenadas = [...colunas].sort((a, b) => a.ordem - b.ordem)
+  const primeiraColuna = colunasOrdenadas[0]
+  const [colunaId, setColunaId] = useState<string>('')
+  const colunaEscolhida = colunaId || primeiraColuna?.id
 
   async function salvar() {
     setErro(null)
@@ -66,10 +71,13 @@ export function NewLeadModal({
         criancaId = crianca?.id ?? null
       }
 
+      const colObj = colunasOrdenadas.find((c) => c.id === colunaEscolhida)
       const { error: errLead } = await supabase.from('leads').insert({
         familia_id: familia.id,
         crianca_id: criancaId,
-        coluna_id: primeiraColuna.id,
+        coluna_id: colunaEscolhida,
+        // Respeita o padrão de IA da coluna (turmas do funil Matriculados = Sara off).
+        ia_ativa: colObj ? colObj.ia_ativa_default : true,
       })
       if (errLead) throw new Error(errLead.message)
 
@@ -105,6 +113,16 @@ export function NewLeadModal({
             <span className="mb-1 block text-xs font-medium text-slate-500">E-mail</span>
             <input value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} placeholder="opcional" />
           </div>
+          {escolherColuna && colunasOrdenadas.length > 0 && (
+            <div>
+              <span className="mb-1 block text-xs font-medium text-slate-500">Turma</span>
+              <select value={colunaEscolhida} onChange={(e) => setColunaId(e.target.value)} className={inputCls}>
+                {colunasOrdenadas.map((c) => (
+                  <option key={c.id} value={c.id}>{c.nome}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <span className="mb-1 block text-xs font-medium text-slate-500">Criança</span>

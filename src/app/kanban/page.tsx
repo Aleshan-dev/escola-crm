@@ -6,8 +6,9 @@ import { Topbar } from '@/components/Topbar'
 import { LeadDetailModal } from '@/components/LeadDetailModal'
 import { NewLeadModal } from '@/components/NewLeadModal'
 import { ChatPopup } from '@/components/ChatPopup'
-import { FunilMatriculados } from '@/components/FunilMatriculados'
 import type { Coluna, Lead } from '@/lib/types'
+
+type Funil = { id: string; nome: string; is_padrao: boolean }
 import {
   DndContext,
   DragEndEvent,
@@ -37,11 +38,13 @@ export default function KanbanPage() {
   const [detalhe, setDetalhe] = useState<Lead | null>(null)
   const [novoLead, setNovoLead] = useState(false)
   const [chatLead, setChatLead] = useState<Lead | null>(null)
-  const [funil, setFunil] = useState<'captacao' | 'matriculados'>('captacao')
+  const [funis, setFunis] = useState<Funil[]>([])
+  const [funilAtivo, setFunilAtivo] = useState<string>('')
 
   async function load() {
     setLoading(true)
-    const [cols, lds] = await Promise.all([
+    const [fns, cols, lds] = await Promise.all([
+      supabase.from('funis').select('id, nome, is_padrao').order('is_padrao', { ascending: false }).order('criado_em'),
       supabase.from('colunas').select('*').order('ordem'),
       supabase
         .from('leads')
@@ -49,6 +52,11 @@ export default function KanbanPage() {
         .eq('arquivado', false)
         .order('criado_em', { ascending: false }),
     ])
+    if (fns.data) {
+      setFunis(fns.data as Funil[])
+      // Default: funil padrão (captação), só na primeira carga.
+      setFunilAtivo((atual) => atual || (fns.data.find((f) => f.is_padrao)?.id ?? fns.data[0]?.id ?? ''))
+    }
     if (cols.data) setColunas(cols.data as Coluna[])
     if (lds.data) setLeads(lds.data as unknown as Lead[])
     setLoading(false)
@@ -78,6 +86,16 @@ export default function KanbanPage() {
       return resp.includes(q) || tel.includes(q) || cri.includes(q)
     })
   }, [leads, busca])
+
+  // Colunas e leads do funil selecionado.
+  const colunasDoFunil = useMemo(
+    () => colunas.filter((c) => c.funil_id === funilAtivo).sort((a, b) => a.ordem - b.ordem),
+    [colunas, funilAtivo]
+  )
+  const leadsDoFunil = useMemo(() => {
+    const ids = new Set(colunasDoFunil.map((c) => c.id))
+    return leadsFiltrados.filter((l) => ids.has(l.coluna_id))
+  }, [leadsFiltrados, colunasDoFunil])
 
   function handleDragStart(event: DragStartEvent) {
     const lead = leads.find((l) => l.id === event.active.id)
@@ -113,47 +131,38 @@ export default function KanbanPage() {
       <Topbar />
 
       <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-white">
-        {/* Seletor de funil */}
-        <div className="flex items-center rounded-lg border border-slate-200 p-0.5 bg-slate-50">
-          <button
-            onClick={() => setFunil('captacao')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
-              funil === 'captacao' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Captação
-          </button>
-          <button
-            onClick={() => setFunil('matriculados')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
-              funil === 'matriculados' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Matriculados
-          </button>
-        </div>
-
-        {funil === 'captacao' && (
-          <>
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-                placeholder="Buscar por responsável, telefone ou criança..."
-                className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-blue-400"
-              />
-            </div>
-            <span className="text-xs text-slate-500">{leadsFiltrados.length} lead(s)</span>
-            <Link href="/arquivados" className="text-xs text-slate-500 hover:text-slate-700 underline">Arquivados</Link>
-          </>
+        {/* Seletor de funil (um botão por funil cadastrado) */}
+        {funis.length > 1 && (
+          <div className="flex items-center rounded-lg border border-slate-200 p-0.5 bg-slate-50">
+            {funis.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFunilAtivo(f.id)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
+                  funilAtivo === f.id ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {f.nome}
+              </button>
+            ))}
+          </div>
         )}
+
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Buscar por responsável, telefone ou criança..."
+            className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-blue-400"
+          />
+        </div>
+        <span className="text-xs text-slate-500">{leadsDoFunil.length} lead(s)</span>
+        <Link href="/arquivados" className="text-xs text-slate-500 hover:text-slate-700 underline">Arquivados</Link>
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {funil === 'matriculados' ? (
-          <FunilMatriculados />
-        ) : loading ? (
+        {loading ? (
           <div className="flex items-center justify-center h-96 text-slate-500">
             <Loader2 className="w-5 h-5 animate-spin mr-2" />
             Carregando funil...
@@ -162,15 +171,18 @@ export default function KanbanPage() {
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div className="overflow-x-auto p-4">
               <div className="flex gap-3 min-w-max">
-                {colunas.map((col) => (
+                {colunasDoFunil.map((col) => (
                   <ColunaView
                     key={col.id}
                     coluna={col}
-                    leads={leadsFiltrados.filter((l) => l.coluna_id === col.id)}
+                    leads={leadsDoFunil.filter((l) => l.coluna_id === col.id)}
                     onOpen={setDetalhe}
                     onChat={setChatLead}
                   />
                 ))}
+                {colunasDoFunil.length === 0 && (
+                  <div className="text-sm text-slate-400 p-8">Nenhuma coluna neste funil.</div>
+                )}
               </div>
             </div>
             <DragOverlay>{activeLead ? <CardLead lead={activeLead} dragging /> : null}</DragOverlay>
@@ -178,24 +190,29 @@ export default function KanbanPage() {
         )}
       </div>
 
-      {funil === 'captacao' && (
-        <button
-          onClick={() => setNovoLead(true)}
-          className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-medium text-white shadow-lg hover:bg-blue-700"
-        >
-          <Plus className="w-5 h-5" />
-          Novo lead
-        </button>
-      )}
+      <button
+        onClick={() => setNovoLead(true)}
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-medium text-white shadow-lg hover:bg-blue-700"
+      >
+        <Plus className="w-5 h-5" />
+        Novo lead
+      </button>
 
       {detalhe && (
         <LeadDetailModal
           lead={detalhe}
-          colunas={colunas}
+          colunas={colunasDoFunil}
           onClose={() => setDetalhe(null)}
         />
       )}
-      {novoLead && <NewLeadModal colunas={colunas} onClose={() => setNovoLead(false)} onCreated={load} />}
+      {novoLead && (
+        <NewLeadModal
+          colunas={colunasDoFunil}
+          escolherColuna={!funis.find((f) => f.id === funilAtivo)?.is_padrao}
+          onClose={() => setNovoLead(false)}
+          onCreated={load}
+        />
+      )}
       {chatLead && <ChatPopup lead={chatLead} onClose={() => setChatLead(null)} />}
     </div>
   )

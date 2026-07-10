@@ -3,6 +3,7 @@ import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 import { notificarGestor } from '@/lib/notificacoes'
 import { labelAcre } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
+import { identificarResponsavel } from '@/lib/sgei'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -149,12 +150,18 @@ export async function processarMensagemRecebida(
     .maybeSingle()
 
   if (!lead) {
-    const { data: primeiraColuna } = await supabase
-      .from('colunas')
-      .select('id, ia_ativa_default')
-      .order('ordem')
+    // Primeira coluna do funil PADRÃO (captação) — não pode cair numa turma do
+    // funil Matriculados só porque a ordem coincide.
+    const { data: funilPadrao } = await supabase
+      .from('funis')
+      .select('id')
+      .eq('is_padrao', true)
       .limit(1)
-      .single()
+      .maybeSingle()
+
+    let colunaQuery = supabase.from('colunas').select('id, ia_ativa_default').order('ordem').limit(1)
+    if (funilPadrao?.id) colunaQuery = colunaQuery.eq('funil_id', funilPadrao.id)
+    const { data: primeiraColuna } = await colunaQuery.single()
 
     const ins = await supabase
       .from('leads')
@@ -182,6 +189,84 @@ export async function processarMensagemRecebida(
     .from('leads')
     .update({ ultima_interacao_em: new Date().toISOString(), followup_count: 0, followup_status: 'ativo' })
     .eq('id', lead.id)
+
+  // Integração SGEI — na primeira vez que um contato aparece, verifica se o
+  // número já é responsável de aluno matriculado. Se for: joga o lead para o
+  // funil "Matriculados" na turma do filho, pausa a Sara (transbordo) e avisa o
+  // gestor. Roda uma única vez por família (guarda em familias.sgei_checado_em).
+  try {
+    const { data: famChk } = await supabase
+      .from('familias')
+      .select('sgei_checado_em')
+      .eq('id', familia.id)
+      .single()
+
+    if (!famChk?.sgei_checado_em) {
+      const ident = await identificarResponsavel(telefone)
+      if (ident) {
+        await supabase
+          .from('familias')
+          .update({
+            sgei_checado_em: new Date().toISOString(),
+            ja_responsavel: ident.ja_responsavel,
+            sgei_nome: ident.nome ?? null,
+            sgei_vinculo_ativo: ident.vinculo_ativo ?? null,
+          })
+          .eq('id', familia.id)
+
+        if (ident.ja_responsavel) {
+          // Coluna da turma no funil Matriculados (se a turma for conhecida).
+          let colunaDestino: string | null = null
+          if (ident.turma_id) {
+            const { data: colTurma } = await supabase
+              .from('colunas')
+              .select('id')
+              .eq('sgei_turma_id', ident.turma_id)
+              .maybeSingle()
+            colunaDestino = colTurma?.id ?? null
+          }
+
+          const upLead: Record<string, unknown> = {
+            ia_ativa: false,
+            precisa_atendimento_humano: true,
+            motivo_transbordo: 'Já é responsável de aluno matriculado (SGEI)',
+            transbordo_em: new Date().toISOString(),
+          }
+          if (colunaDestino) {
+            upLead.coluna_id = colunaDestino
+            upLead.entrou_coluna_em = new Date().toISOString()
+          }
+          await supabase.from('leads').update(upLead).eq('id', lead.id)
+          // Reflete no objeto em memória para o restante do fluxo pular a Sara.
+          lead.ia_ativa = false
+          lead.precisa_atendimento_humano = true
+
+          await supabase.from('eventos_timeline').insert({
+            lead_id: lead.id,
+            tipo: 'status_ia',
+            descricao:
+              `Contato identificado no SGEI como responsável` +
+              (ident.aluno_nome ? ` de ${ident.aluno_nome}` : '') +
+              (ident.turma_nome ? ` (${ident.turma_nome})` : '') +
+              `. Sara pausada e lead movido para o funil Matriculados.`,
+          })
+
+          await notificarGestor(
+            supabase,
+            'transbordo',
+            `👨‍👩‍👧 *Responsável já matriculado entrou em contato*\n` +
+              `Nome: ${familia.nome_responsavel || ident.nome || 'Família'}\n` +
+              (ident.aluno_nome ? `Aluno: ${ident.aluno_nome}\n` : '') +
+              (ident.turma_nome ? `Turma: ${ident.turma_nome}\n` : '') +
+              `Telefone: ${telefone}\n\n` +
+              `A Sara foi pausada e o contato está no funil *Matriculados*. Atenda pelo CRM.`
+          )
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Check SGEI (entrada de contato) falhou:', e)
+  }
 
   if (lead.ia_ativa && !lead.precisa_atendimento_humano) {
     try {

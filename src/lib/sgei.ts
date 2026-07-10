@@ -52,6 +52,65 @@ export async function checkLead(whatsapp: string): Promise<CheckLead | null> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Identificação de responsável na ENTRADA de um contato (leitura direta da base
+// do SGEI). Replica a normalização da RPC check_lead (últimos 11 dígitos =
+// responsaveis.celular_norm) e ainda descobre a TURMA do aluno ativo, para
+// posicionar o lead na coluna certa do funil "Matriculados".
+// ---------------------------------------------------------------------------
+export type ResponsavelSgei = {
+  ja_responsavel: boolean
+  nome?: string | null
+  vinculo_ativo?: boolean
+  turma_id?: string | null
+  turma_nome?: string | null
+  aluno_nome?: string | null
+}
+
+export async function identificarResponsavel(telefone: string): Promise<ResponsavelSgei | null> {
+  if (!sgeiConfigurado()) return null
+  const norm = (telefone || '').replace(/\D/g, '').slice(-11)
+  if (norm.length !== 11) return { ja_responsavel: false }
+  try {
+    const sgei = createSgeiClient()
+    const { data: resp } = await sgei
+      .from('responsaveis')
+      .select('id, nome')
+      .eq('celular_norm', norm)
+      .limit(1)
+      .maybeSingle()
+    if (!resp) return { ja_responsavel: false }
+
+    const { data: vinculos } = await sgei
+      .from('aluno_responsavel')
+      .select('alunos!inner(id, nome, status, turma_id, turmas(id, nome))')
+      .eq('responsavel_id', (resp as any).id)
+
+    let vinculo_ativo = false
+    let turma_id: string | null = null
+    let turma_nome: string | null = null
+    let aluno_nome: string | null = null
+    for (const v of (vinculos || []) as any[]) {
+      const a = v.alunos
+      if (a && a.status === 'ativo') {
+        vinculo_ativo = true
+        aluno_nome = a.nome ?? aluno_nome
+        if (a.turma_id) {
+          turma_id = a.turma_id
+          turma_nome = a.turmas?.nome ?? null
+          break // prefere um vínculo que já tenha turma definida
+        }
+      }
+    }
+
+    const primeiroNome = ((resp as any).nome || '').split(' ')[0] || (resp as any).nome
+    return { ja_responsavel: true, nome: primeiroNome, vinculo_ativo, turma_id, turma_nome, aluno_nome }
+  } catch (e) {
+    console.error('[sgei] identificarResponsavel falhou:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
 // Ocupação por turma (com vagas). Cache curto para não bater a cada mensagem.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _ocupCache: { at: number; data: any } | null = null
