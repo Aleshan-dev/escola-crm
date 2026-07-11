@@ -130,7 +130,7 @@ export default function KanbanPage() {
     <div className="min-h-screen flex flex-col">
       <Topbar />
 
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-slate-200 bg-white">
         {/* Seletor de funil (um botão por funil cadastrado) */}
         {funis.length > 1 && (
           <div className="flex items-center rounded-lg border border-slate-200 p-0.5 bg-slate-50">
@@ -148,7 +148,7 @@ export default function KanbanPage() {
           </div>
         )}
 
-        <div className="relative flex-1 max-w-sm">
+        <div className="relative flex-1 min-w-[160px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             value={busca}

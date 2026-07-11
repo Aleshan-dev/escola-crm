@@ -97,19 +97,34 @@ export async function descreverImagem(base64: string, mimetype: string): Promise
  * Usado pelos dois canais (Evolution e Cloud).
  */
 export async function interpretarMidia(
-  tipo: 'audio' | 'imagem',
+  tipo: 'audio' | 'imagem' | 'documento',
   base64: string,
   mimetype: string,
-  caption?: string
+  caption?: string,
+  filename?: string
 ): Promise<string> {
   if (tipo === 'audio') {
     const texto = await transcreverAudio(base64, mimetype)
     return texto || '[O responsável enviou um áudio que não consegui transcrever. Peça, com gentileza, que repita por texto.]'
   }
-  const desc = await descreverImagem(base64, mimetype)
-  const corpo = desc
-    ? `[O responsável enviou uma imagem. Conteúdo: ${desc}]`
-    : '[O responsável enviou uma imagem que não consegui interpretar.]'
+
+  const ehImagem = tipo === 'imagem' || (mimetype || '').startsWith('image/')
+
+  // Documento que na verdade é uma foto (ex.: comprovante enviado como arquivo) → visão.
+  if (ehImagem) {
+    const desc = await descreverImagem(base64, mimetype)
+    const corpo = desc
+      ? `[O responsável enviou ${tipo === 'documento' ? 'um documento (imagem)' : 'uma imagem'}. Conteúdo: ${desc}]`
+      : '[O responsável enviou uma imagem que não consegui interpretar.]'
+    return caption ? `${caption}\n${corpo}` : corpo
+  }
+
+  // Documento não-imagem (PDF, etc.) — não dá para "ver" o conteúdo automaticamente.
+  const nome = filename || 'arquivo'
+  const corpo =
+    `[O responsável enviou um documento: "${nome}"${mimetype ? ` (${mimetype})` : ''}. ` +
+    `Provavelmente um comprovante/documento. Confirme o recebimento com gentileza e diga que a equipe vai conferir; ` +
+    `se precisar de algum dado específico, peça por texto.]`
   return caption ? `${caption}\n${corpo}` : corpo
 }
 
@@ -121,19 +136,24 @@ export async function extrairConteudoMidia(data: EvolutionData): Promise<string 
   const msg = data.message || {}
   const temAudio = !!msg.audioMessage
   const temImagem = !!msg.imageMessage
-  if (!temAudio && !temImagem) return null
+  const doc = msg.documentMessage || msg.documentWithCaptionMessage?.message?.documentMessage
+  const temDoc = !!doc
+  if (!temAudio && !temImagem && !temDoc) return null
 
   const midia = await baixarMidiaBase64(data)
   if (!midia) {
     return temAudio
       ? '[O responsável enviou um áudio, mas não consegui baixá-lo. Peça, com gentileza, que ele repita por texto.]'
-      : '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que ele reenvie ou descreva por texto.]'
+      : temImagem
+        ? '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que ele reenvie ou descreva por texto.]'
+        : '[O responsável enviou um documento, mas não consegui baixá-lo. Peça, com gentileza, que ele reenvie ou descreva por texto.]'
   }
 
   return interpretarMidia(
-    temAudio ? 'audio' : 'imagem',
+    temAudio ? 'audio' : temImagem ? 'imagem' : 'documento',
     midia.base64,
     midia.mimetype,
-    msg.imageMessage?.caption || undefined
+    msg.imageMessage?.caption || doc?.caption || undefined,
+    doc?.fileName || doc?.title || undefined
   )
 }

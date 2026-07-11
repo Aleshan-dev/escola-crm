@@ -9,7 +9,7 @@ import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import type { Lead, Mensagem } from '@/lib/types'
-import { Bot, Send, Loader2, User, RefreshCw } from 'lucide-react'
+import { Bot, Send, Loader2, User, RefreshCw, ChevronLeft } from 'lucide-react'
 
 // Rótulo do separador de data (estilo WhatsApp): Hoje / Ontem / DD/MM/AAAA
 function labelData(iso: string): string {
@@ -31,6 +31,7 @@ function ChatPageInner() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [atualizando, setAtualizando] = useState(false)
+  const [mostrarConversa, setMostrarConversa] = useState(false) // mobile: alterna lista/conversa
   const msgsRef = useRef<HTMLDivElement>(null)
 
   async function loadLeads() {
@@ -124,7 +125,7 @@ function ChatPageInner() {
       <Topbar />
 
       <div className="flex-1 flex overflow-hidden">
-        <aside className="w-[260px] border-r border-slate-200 bg-white overflow-y-auto">
+        <aside className={`w-full md:w-[260px] flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto ${mostrarConversa ? 'hidden md:block' : 'block'}`}>
           {leads.length === 0 && (
             <div className="p-6 text-center text-xs text-slate-400">Nenhum lead ainda. Quando alguém mandar mensagem no WhatsApp, aparece aqui.</div>
           )}
@@ -133,7 +134,7 @@ function ChatPageInner() {
             return (
               <button
                 key={l.id}
-                onClick={() => setActiveLead(l)}
+                onClick={() => { setActiveLead(l); setMostrarConversa(true) }}
                 className={`w-full text-left p-3 border-b border-slate-100 hover:bg-slate-50 transition ${active ? 'bg-blue-50' : ''}`}
               >
                 <div className="flex items-center gap-2 mb-0.5">
@@ -146,14 +147,21 @@ function ChatPageInner() {
           })}
         </aside>
 
-        <main className="flex-1 flex flex-col bg-white">
+        <main className={`flex-1 flex-col bg-white ${mostrarConversa ? 'flex' : 'hidden md:flex'}`}>
           {!activeLead ? (
             <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
               Selecione uma conversa
             </div>
           ) : (
             <>
-              <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-3">
+              <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={() => setMostrarConversa(false)}
+                  className="md:hidden text-slate-500 hover:text-slate-700"
+                  aria-label="Voltar para a lista"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
                 <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center">
                   <User className="w-4 h-4 text-slate-500" />
                 </div>
@@ -168,7 +176,7 @@ function ChatPageInner() {
                   className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-600 border border-slate-200 rounded-lg px-2.5 py-1.5 disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${atualizando ? 'animate-spin' : ''}`} />
-                  {atualizando ? 'Atualizando...' : 'Atualizar conversa'}
+                  <span className="hidden sm:inline">{atualizando ? 'Atualizando...' : 'Atualizar conversa'}</span>
                 </button>
                 <label className="flex items-center gap-2 text-xs">
                   <Bot className="w-4 h-4 text-slate-500" />

@@ -53,7 +53,13 @@ export async function POST(req: NextRequest) {
       conteudo = m
         ? await interpretarMidia('imagem', m.base64, m.mimetype, msg.image?.caption)
         : '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que reenvie ou descreva por texto.]'
+    } else if (msg.type === 'document' && msg.document?.id && token) {
+      const m = await baixarMidiaCloud(msg.document.id, token)
+      conteudo = m
+        ? await interpretarMidia('documento', m.base64, m.mimetype, msg.document?.caption, msg.document?.filename)
+        : '[O responsável enviou um documento, mas não consegui baixá-lo. Peça, com gentileza, que reenvie ou descreva por texto.]'
     } else {
+      console.log('[whatsapp-cloud] tipo de mensagem ignorado:', msg.type)
       return NextResponse.json({ ignored: `tipo ${msg.type}` })
     }
 
