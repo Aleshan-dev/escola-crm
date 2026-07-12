@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { enviarTextoCloud, enviarTextoCloudConta, baixarMidiaCloud } from '@/lib/whatsapp-cloud'
-import { interpretarMidia } from '@/lib/midia'
+import { interpretarMidia, salvarMidiaStorage } from '@/lib/midia'
 import { registrarAlerta } from '@/lib/alertas'
 import { processarMensagemRecebida, type EnviarTexto } from '@/lib/atendimento'
 
@@ -39,25 +39,52 @@ export async function POST(req: NextRequest) {
     const wid: string = msg.id || ''
     const token: string = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN || ''
 
-    // Texto, áudio (transcrição) ou imagem (visão). Outros tipos são ignorados.
+    // Texto ou mídia. A mídia é interpretada para a Sara (transcrição/visão) E o
+    // arquivo original é salvo no storage, para abrir pelo chat.
     let conteudo = ''
+    let tipoMidia = 'texto'
+    let urlMidia: string | null = null
+
     if (msg.type === 'text') {
       conteudo = msg.text?.body || ''
     } else if (msg.type === 'audio' && msg.audio?.id && token) {
+      tipoMidia = 'audio'
       const m = await baixarMidiaCloud(msg.audio.id, token)
-      conteudo = m
-        ? await interpretarMidia('audio', m.base64, m.mimetype)
-        : '[O responsável enviou um áudio, mas não consegui baixá-lo. Peça, com gentileza, que repita por texto.]'
+      if (m) {
+        conteudo = await interpretarMidia('audio', m.base64, m.mimetype)
+        urlMidia = await salvarMidiaStorage(supabase, { base64: m.base64, mimetype: m.mimetype })
+      } else {
+        conteudo = '[O responsável enviou um áudio, mas não consegui baixá-lo. Peça, com gentileza, que repita por texto.]'
+      }
     } else if (msg.type === 'image' && msg.image?.id && token) {
+      tipoMidia = 'imagem'
       const m = await baixarMidiaCloud(msg.image.id, token)
-      conteudo = m
-        ? await interpretarMidia('imagem', m.base64, m.mimetype, msg.image?.caption)
-        : '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que reenvie ou descreva por texto.]'
+      if (m) {
+        conteudo = await interpretarMidia('imagem', m.base64, m.mimetype, msg.image?.caption)
+        urlMidia = await salvarMidiaStorage(supabase, { base64: m.base64, mimetype: m.mimetype })
+      } else {
+        conteudo = '[O responsável enviou uma imagem, mas não consegui abri-la. Peça, com gentileza, que reenvie ou descreva por texto.]'
+      }
     } else if (msg.type === 'document' && msg.document?.id && token) {
+      tipoMidia = 'documento'
       const m = await baixarMidiaCloud(msg.document.id, token)
-      conteudo = m
-        ? await interpretarMidia('documento', m.base64, m.mimetype, msg.document?.caption, msg.document?.filename)
-        : '[O responsável enviou um documento, mas não consegui baixá-lo. Peça, com gentileza, que reenvie ou descreva por texto.]'
+      if (m) {
+        conteudo = await interpretarMidia('documento', m.base64, m.mimetype, msg.document?.caption, msg.document?.filename)
+        urlMidia = await salvarMidiaStorage(supabase, { base64: m.base64, mimetype: m.mimetype, filename: msg.document?.filename })
+      } else {
+        conteudo = '[O responsável enviou um documento, mas não consegui baixá-lo. Peça, com gentileza, que reenvie ou descreva por texto.]'
+      }
+    } else if (msg.type === 'video' && msg.video?.id && token) {
+      tipoMidia = 'video'
+      const m = await baixarMidiaCloud(msg.video.id, token)
+      if (m) {
+        urlMidia = await salvarMidiaStorage(supabase, { base64: m.base64, mimetype: m.mimetype })
+        conteudo = msg.video?.caption
+          ? `${msg.video.caption}\n[O responsável enviou um vídeo — abra pelo chat para assistir.]`
+          : '[O responsável enviou um vídeo — abra pelo chat para assistir.]'
+      } else {
+        conteudo = '[O responsável enviou um vídeo, mas não consegui baixá-lo.]'
+      }
     } else {
       console.log('[whatsapp-cloud] tipo de mensagem ignorado:', msg.type)
       return NextResponse.json({ ignored: `tipo ${msg.type}` })
@@ -91,6 +118,8 @@ export async function POST(req: NextRequest) {
       campanha: ref ? ref.headline || ref.source_id || null : null,
       referral: ref || null,
       phoneNumberId,
+      tipoMidia,
+      urlMidia,
     })
 
     return NextResponse.json({ ok: true })

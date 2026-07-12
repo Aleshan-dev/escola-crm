@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import type { Lead, Mensagem } from '@/lib/types'
 import { Bot, Send, Loader2, User, RefreshCw, ChevronLeft } from 'lucide-react'
+import { MidiaMensagem } from '@/components/MidiaMensagem'
 
 // Rótulo do separador de data (estilo WhatsApp): Hoje / Ontem / DD/MM/AAAA
 function labelData(iso: string): string {
@@ -210,6 +211,9 @@ function ChatPageInner() {
                       )}
                       <div className={`flex ${isIn ? 'justify-start' : 'justify-end'}`}>
                         <div className={`max-w-[70%] px-3 py-2 rounded-2xl text-sm ${isIn ? 'bg-white border border-slate-200 rounded-bl-md' : isIA ? 'bg-green-100 text-green-900 rounded-br-md' : 'bg-blue-100 text-blue-900 rounded-br-md'}`}>
+                          {m.tipo_midia && m.tipo_midia !== 'texto' && m.url_midia && (
+                            <div className="mb-1"><MidiaMensagem tipo={m.tipo_midia} path={m.url_midia} /></div>
+                          )}
                           {m.conteudo}
                           <div className={`text-[10px] mt-1 ${isIn ? 'text-slate-400' : isIA ? 'text-green-700/70' : 'text-blue-700/70'}`}>
                             {isIA ? 'Sara IA' : isIn ? 'Família' : 'Equipe'} · {new Date(m.criado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} {new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}

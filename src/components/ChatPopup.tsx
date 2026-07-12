@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import type { Lead, Mensagem } from '@/lib/types'
 import { X, Send, Loader2, Bot } from 'lucide-react'
+import { MidiaMensagem } from '@/components/MidiaMensagem'
 
 // Rótulo do separador de data (Hoje / Ontem / DD/MM/AAAA)
 function labelData(iso: string): string {
@@ -123,6 +124,9 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
                         : 'rounded-br-md bg-blue-100 text-blue-900'
                   }`}
                 >
+                  {m.tipo_midia && m.tipo_midia !== 'texto' && m.url_midia && (
+                    <div className="mb-1"><MidiaMensagem tipo={m.tipo_midia} path={m.url_midia} /></div>
+                  )}
                   {m.conteudo}
                   <div className={`mt-1 text-[10px] ${isIn ? 'text-slate-400' : isIA ? 'text-green-700/70' : 'text-blue-700/70'}`}>
                     {isIA ? 'Sara IA' : isIn ? 'Família' : 'Equipe'} ·{' '}

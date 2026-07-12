@@ -108,9 +108,11 @@ export async function processarMensagemRecebida(
     campanha?: string | null
     referral?: unknown // payload bruto do anúncio, para auditoria
     phoneNumberId?: string | null // número oficial da escola que recebeu a mensagem
+    tipoMidia?: string // 'texto' | 'imagem' | 'audio' | 'documento' | 'video'
+    urlMidia?: string | null // caminho do arquivo no storage (bucket 'midias')
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia } = params
 
   let { data: familia } = await supabase
     .from('familias')
@@ -182,6 +184,8 @@ export async function processarMensagemRecebida(
     direcao: 'in',
     conteudo,
     whatsapp_message_id: wid,
+    tipo_midia: tipoMidia || 'texto',
+    url_midia: urlMidia || null,
   })
 
   // Lead respondeu: atualiza última interação e reengaja o follow-up (zera contador)

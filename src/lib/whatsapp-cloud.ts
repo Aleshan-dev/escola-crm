@@ -88,8 +88,13 @@ export async function enviarTextoWhatsApp(
     conta = data
   }
 
-  const sent = conta?.token
-    ? await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
-    : await enviarTextoCloud(to, texto)
-  return sent?.messages?.[0]?.id || null
+  if (conta?.token) {
+    const sent = await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
+    return sent?.messages?.[0]?.id || null
+  }
+
+  // Sem conta Cloud ativa: o número está conectado via Evolution -> envia pelo Evolution.
+  const { evolutionSendText } = await import('@/lib/evolution')
+  const sent = await evolutionSendText(to, texto)
+  return sent?.key?.id || null
 }

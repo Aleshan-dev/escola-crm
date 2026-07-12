@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import OpenAI, { toFile } from 'openai'
+import { randomUUID } from 'crypto'
 
 // Processamento de mídia recebida no WhatsApp (Evolution): baixa o arquivo,
 // transcreve áudio (Whisper) e descreve imagem (gpt-4o visão). Devolve um texto
@@ -39,6 +40,51 @@ async function baixarMidiaBase64(data: EvolutionData): Promise<{ base64: string;
     return { base64, mimetype }
   } catch (e) {
     console.error('[midia] erro no download:', e)
+    return null
+  }
+}
+
+// Extensão de arquivo a partir do mimetype (ou do nome original, se houver).
+function extDaMidia(mimetype: string, filename?: string): string {
+  if (filename && filename.includes('.')) {
+    const e = filename.split('.').pop()!.toLowerCase().replace(/[^a-z0-9]/g, '')
+    if (e) return e.slice(0, 8)
+  }
+  const m = (mimetype || '').toLowerCase()
+  if (m.includes('jpeg') || m.includes('jpg')) return 'jpg'
+  if (m.includes('png')) return 'png'
+  if (m.includes('webp')) return 'webp'
+  if (m.includes('gif')) return 'gif'
+  if (m.includes('pdf')) return 'pdf'
+  if (m.includes('ogg')) return 'ogg'
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3'
+  if (m.includes('mp4')) return 'mp4'
+  if (m.includes('wav')) return 'wav'
+  return 'bin'
+}
+
+// Salva o arquivo original (base64) no bucket privado 'midias' e devolve o CAMINHO
+// (não a URL) — o chat gera uma URL assinada sob autenticação via /api/midia.
+export async function salvarMidiaStorage(
+  supabase: any,
+  file: { base64: string; mimetype: string; filename?: string }
+): Promise<string | null> {
+  try {
+    const buf = Buffer.from(file.base64, 'base64')
+    const ext = extDaMidia(file.mimetype, file.filename)
+    const hoje = new Date().toISOString().slice(0, 10) // YYYY-MM-DD (organização)
+    const path = `${hoje}/${randomUUID()}.${ext}`
+    const { error } = await supabase.storage.from('midias').upload(path, buf, {
+      contentType: file.mimetype || 'application/octet-stream',
+      upsert: false,
+    })
+    if (error) {
+      console.error('[midia] upload storage falhou:', error.message)
+      return null
+    }
+    return path
+  } catch (e) {
+    console.error('[midia] erro no upload storage:', e)
     return null
   }
 }
