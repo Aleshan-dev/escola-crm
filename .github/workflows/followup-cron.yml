@@ -1,7 +1,10 @@
-name: Cron Sara (follow-up + Google sync)
+name: Cron Sara (follow-up)
 
-# ADR-004: agenda o follow-up automático da Sara (e o sync do Google Calendar)
-# via GitHub Actions, contornando o limite de cron diário do plano Vercel Hobby.
+# ADR-004: agenda o follow-up automático da Sara via GitHub Actions, contornando
+# o limite de cron diário do plano Vercel Hobby.
+# ADR-006: o sync do Google Calendar SAIU daqui — agora é por push notification
+# (webhook), não polling. Ver .github/workflows/google-daily.yml para a renovação
+# do canal + rede de segurança diária.
 # Requer o secret CRON_SECRET no repositório (mesmo valor que os endpoints validam).
 # Cada passo FALHA se a resposta não for HTTP 200 — o GitHub notifica o dono por e-mail.
 on:
@@ -20,14 +23,4 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
           echo "followup -> HTTP $code"
           cat /tmp/followup.txt || true
-          test "$code" = "200"
-
-      - name: Sincronizar Google Calendar
-        if: always() # roda mesmo se o passo anterior falhar
-        run: |
-          code=$(curl -sS -o /tmp/gsync.txt -w "%{http_code}" -X GET \
-            "https://escola-crm.vercel.app/api/cron/google-sync" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
-          echo "google-sync -> HTTP $code"
-          cat /tmp/gsync.txt || true
           test "$code" = "200"
