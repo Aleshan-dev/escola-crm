@@ -3,7 +3,7 @@ import { createClient, createServerAdminClient } from '@/lib/supabase-server'
 import { rodarAuditoria } from '@/lib/auditoria'
 
 // Dispara a auditoria da Sara sob demanda (session-authed), sem esperar o cron.
-export const maxDuration = 60
+export const maxDuration = 120
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()

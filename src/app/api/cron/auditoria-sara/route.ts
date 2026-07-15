@@ -6,7 +6,7 @@ import { registrarAlerta } from '@/lib/alertas'
 
 // Auditoria diária do atendimento da Sara. Aceita o cron da Vercel (x-vercel-cron)
 // ou o Bearer CRON_SECRET. Roda a análise, grava o relatório e avisa o gestor.
-export const maxDuration = 60
+export const maxDuration = 120
 
 export async function GET(req: NextRequest) {
   const autorizado =

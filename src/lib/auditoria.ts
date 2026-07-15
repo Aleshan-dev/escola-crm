@@ -3,8 +3,8 @@ import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
 
 // Auditoria diária do atendimento da Sara: cruza checagens determinísticas (o que
-// dá pra medir no banco) com uma revisão por IA das conversas do dia, contra as
-// regras propostas. Gera nota, achados e sugestões de correção.
+// dá pra medir no banco) com uma avaliação por IA de cada conversa, num gabarito
+// de 10 critérios + entregáveis (pontos fortes, oportunidades, reescritas, etc.).
 
 type Supa = ReturnType<typeof createServerAdminClient>
 
@@ -14,34 +14,51 @@ function getOpenAI(): OpenAI {
   return _openai
 }
 
-// Regras que a Sara deve seguir (do manual + guard-rails do sistema). É o gabarito da auditoria.
+// Regras que a Sara deve seguir (do manual + guard-rails). Contexto do avaliador.
 const REGRAS = `REGRAS QUE A SARA DEVE SEGUIR:
-1. PERSONALIZAÇÃO: chamar o responsável pelo primeiro nome e no gênero certo. NUNCA confundir o nome da criança com o do responsável. Se o nome do perfil parecer ser o da criança, perguntar o nome do responsável.
-2. DADOS OBRIGATÓRIOS: coletar nome da criança, idade, série/turma e período (um de cada vez) antes de avançar a etapa. Se houver irmãos, coletar de cada criança.
-3. ANTI-ALUCINAÇÃO: nunca inventar preço, endereço, nome de professora ou qualquer dado fora da base. Se não souber, dizer que vai verificar com a equipe.
-4. BALÕES CURTOS: mensagens curtas e acolhedoras, sem textão.
-5. VISITA: só confirmar/agendar visita com data e horário específicos; oferecer só horários realmente livres; ao reagendar, atualizar a visita existente (não criar outra); não dizer que a visita foi realizada antes de a data passar.
-6. VAGAS: não oferecer turma sem vaga; se lotada, oferecer lista de espera ou turma próxima com vaga.
-7. TRANSBORDO: acionar atendimento humano quando o lead pede humano/coordenação, faz reclamação grave, ou quando ela já disse "vou verificar com a equipe" 2+ vezes.
-8. FOLLOW-UP: mensagens de retomada personalizadas (usando o que já foi conversado), sem repetir mensagens anteriores nem pressionar.
-9. TOM: acolhedor, cristão, profissional; não prometer o que não pode cumprir.`
+- Personalizar (nome e gênero certos; nunca confundir nome da criança com o do responsável).
+- Coletar os dados obrigatórios (nome/idade/série/período da criança; de cada irmão) antes de avançar.
+- Nunca inventar preço, endereço, professora ou dado fora da base (anti-alucinação).
+- Mensagens curtas e acolhedoras (balões), tom cristão e profissional.
+- Só agendar/confirmar visita com data e horário específicos; oferecer só horários livres; reagendar = atualizar a visita; não marcar "realizada" antes da data.
+- Não oferecer turma sem vaga.
+- Fazer transbordo quando o lead pede humano/coordenação, reclama, ou após dizer "vou verificar" 2+ vezes.
+- Follow-up personalizado, sem repetir e sem pressionar.`
 
-export type ProblemaConversa = { regra: string; descricao: string; gravidade: 'baixa' | 'media' | 'alta' }
+export type CriteriosAval = {
+  acolhimento: number
+  humanizacao: number
+  diagnostico: number
+  escuta_ativa: number
+  construcao_valor: number
+  objecoes: number
+  convite_visita: number
+  comunicacao: number
+  followup: number
+  probabilidade_matricula: number
+}
+export type MensagemReescrita = { original: string; sugestao: string }
 export type DetalheConversa = {
   lead_id: string
   responsavel: string
   nota: number
-  problemas: ProblemaConversa[]
-  acertos: string[]
+  criterios: CriteriosAval
+  pontos_fortes: string[]
+  oportunidades: string[]
+  mensagens_reescrever: MensagemReescrita[]
+  melhor_resposta: string
+  proxima_acao: string
+  classificacao: string
+  estagio_funil: string
+  resumo: string
 }
 
 // ---------------------------------------------------------------------------
-// 1) Checagens determinísticas (sinais objetivos do banco)
+// Checagens determinísticas (sinais objetivos do banco)
 // ---------------------------------------------------------------------------
 async function checagensDeterministicas(supabase: Supa, inicioIso: string): Promise<string[]> {
   const achados: string[] = []
 
-  // a) Leads em etapa "Visita Agendada" sem nenhuma tarefa de visita
   const { data: colsVisita } = await supabase.from('colunas').select('id, nome').ilike('nome', '%visita agendada%')
   const idsVisitaAgendada = (colsVisita || []).map((c: any) => c.id)
   if (idsVisitaAgendada.length) {
@@ -60,7 +77,6 @@ async function checagensDeterministicas(supabase: Supa, inicioIso: string): Prom
     }
   }
 
-  // b) Recusas de movimentação da Sara no período (tentou mover errado)
   const { data: recusas } = await supabase
     .from('acoes_sara')
     .select('razao')
@@ -70,11 +86,9 @@ async function checagensDeterministicas(supabase: Supa, inicioIso: string): Prom
   if (recusas && recusas.length) {
     const cont: Record<string, number> = {}
     for (const r of recusas as any[]) cont[r.razao || 'desconhecido'] = (cont[r.razao || 'desconhecido'] || 0) + 1
-    const resumoRec = Object.entries(cont).map(([k, v]) => `${k}: ${v}x`).join(', ')
-    achados.push(`A Sara tentou mover leads de forma indevida (bloqueado pelo sistema): ${resumoRec}.`)
+    achados.push(`Movimentações indevidas bloqueadas pelo sistema: ${Object.entries(cont).map(([k, v]) => `${k}: ${v}x`).join(', ')}.`)
   }
 
-  // c) Possível confusão nome do responsável = nome de criança da família
   const { data: fams } = await supabase
     .from('familias')
     .select('nome_responsavel, criancas(nome)')
@@ -82,7 +96,10 @@ async function checagensDeterministicas(supabase: Supa, inicioIso: string): Prom
   for (const f of (fams || []) as any[]) {
     const nr = (f.nome_responsavel || '').trim().toLowerCase()
     if (!nr) continue
-    const bate = (f.criancas || []).some((c: any) => (c.nome || '').trim().toLowerCase() && nr.includes((c.nome || '').trim().toLowerCase()))
+    const bate = (f.criancas || []).some((c: any) => {
+      const cn = (c.nome || '').trim().toLowerCase()
+      return cn && nr.includes(cn)
+    })
     if (bate) achados.push(`Possível confusão de nome: responsável "${f.nome_responsavel}" parece ter o nome de uma criança da família.`)
   }
 
@@ -90,58 +107,91 @@ async function checagensDeterministicas(supabase: Supa, inicioIso: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// 2) Revisão de uma conversa por IA
+// Avaliação de uma conversa por IA (gabarito completo)
 // ---------------------------------------------------------------------------
-async function revisarConversa(
-  responsavel: string,
-  transcript: string
-): Promise<{ nota: number; problemas: ProblemaConversa[]; acertos: string[] }> {
-  const prompt = `Você é auditor de qualidade do atendimento da "Sara", assistente de matrículas de uma escola infantil.
+const N0 = (v: any, max = 10) => (typeof v === 'number' ? Math.max(0, Math.min(max, Math.round(v))) : 0)
+const S = (v: any) => (typeof v === 'string' ? v : '')
+const ARR = (v: any): any[] => (Array.isArray(v) ? v : [])
+
+async function avaliarConversa(responsavel: string, estagioAtual: string, transcript: string): Promise<Omit<DetalheConversa, 'lead_id' | 'responsavel'>> {
+  const prompt = `Você é auditor de qualidade de vendas consultivas. Avalie o desempenho da "Sara" (assistente de matrículas de uma escola infantil cristã) na conversa abaixo.
 ${REGRAS}
 
-Analise a conversa abaixo (Família = lead; Sara = assistente) e avalie SÓ o desempenho da Sara.
-Responda em JSON: {"nota": 0-100, "problemas": [{"regra":"nº ou tema","descricao":"o que ela errou","gravidade":"baixa|media|alta"}], "acertos": ["pontos positivos"]}.
-Seja específico e cite a regra. Se não houver problemas, "problemas": [].
+Dê uma nota de 0 a 10 para cada critério (10 = probabilidade em %):
+1. Acolhimento, 2. Humanização, 3. Diagnóstico, 4. Escuta ativa, 5. Construção de valor, 6. Tratamento de objeções, 7. Convite para visita, 8. Comunicação, 9. Follow-up, 10. Probabilidade de matrícula (0–100%).
 
+Depois entregue: nota geral (0–100), 3 pontos fortes, 3 oportunidades de melhoria, mensagens que poderiam ser reescritas (com a versão melhor), a melhor resposta sugerida agora, a próxima melhor ação, a classificação do lead (Frio, Morno ou Quente), o estágio do funil, e um resumo executivo (≤100 palavras).
+
+Responda SOMENTE em JSON:
+{
+ "criterios": {"acolhimento":0,"humanizacao":0,"diagnostico":0,"escuta_ativa":0,"construcao_valor":0,"objecoes":0,"convite_visita":0,"comunicacao":0,"followup":0,"probabilidade_matricula":0},
+ "nota_geral": 0,
+ "pontos_fortes": ["","",""],
+ "oportunidades": ["","",""],
+ "mensagens_reescrever": [{"original":"","sugestao":""}],
+ "melhor_resposta": "",
+ "proxima_acao": "",
+ "classificacao": "Frio|Morno|Quente",
+ "estagio_funil": "",
+ "resumo": ""
+}
+
+Estágio atual do lead no CRM: ${estagioAtual || 'desconhecido'}.
 CONVERSA (responsável: ${responsavel}):
 ${transcript}`
 
   try {
     const resp = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
-      max_tokens: 600,
+      max_tokens: 1100,
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
     })
     const j = JSON.parse(resp.choices[0]?.message?.content || '{}')
+    const c = j.criterios || {}
     return {
-      nota: typeof j.nota === 'number' ? j.nota : 70,
-      problemas: Array.isArray(j.problemas) ? j.problemas : [],
-      acertos: Array.isArray(j.acertos) ? j.acertos : [],
+      nota: N0(j.nota_geral, 100),
+      criterios: {
+        acolhimento: N0(c.acolhimento),
+        humanizacao: N0(c.humanizacao),
+        diagnostico: N0(c.diagnostico),
+        escuta_ativa: N0(c.escuta_ativa),
+        construcao_valor: N0(c.construcao_valor),
+        objecoes: N0(c.objecoes),
+        convite_visita: N0(c.convite_visita),
+        comunicacao: N0(c.comunicacao),
+        followup: N0(c.followup),
+        probabilidade_matricula: N0(c.probabilidade_matricula, 100),
+      },
+      pontos_fortes: ARR(j.pontos_fortes).map(S).filter(Boolean).slice(0, 3),
+      oportunidades: ARR(j.oportunidades).map(S).filter(Boolean).slice(0, 3),
+      mensagens_reescrever: ARR(j.mensagens_reescrever)
+        .map((m: any) => ({ original: S(m?.original), sugestao: S(m?.sugestao) }))
+        .filter((m) => m.original || m.sugestao)
+        .slice(0, 4),
+      melhor_resposta: S(j.melhor_resposta),
+      proxima_acao: S(j.proxima_acao),
+      classificacao: S(j.classificacao) || '—',
+      estagio_funil: S(j.estagio_funil) || estagioAtual || '—',
+      resumo: S(j.resumo),
     }
   } catch (e) {
-    console.error('[auditoria] revisão de conversa falhou:', e instanceof Error ? e.message : e)
-    return { nota: 0, problemas: [{ regra: 'sistema', descricao: 'Falha ao analisar', gravidade: 'baixa' }], acertos: [] }
+    console.error('[auditoria] avaliação falhou:', e instanceof Error ? e.message : e)
+    return {
+      nota: 0,
+      criterios: { acolhimento: 0, humanizacao: 0, diagnostico: 0, escuta_ativa: 0, construcao_valor: 0, objecoes: 0, convite_visita: 0, comunicacao: 0, followup: 0, probabilidade_matricula: 0 },
+      pontos_fortes: [], oportunidades: [], mensagens_reescrever: [], melhor_resposta: '', proxima_acao: '', classificacao: '—', estagio_funil: estagioAtual || '—', resumo: 'Falha ao analisar esta conversa.',
+    }
   }
 }
 
-// ---------------------------------------------------------------------------
-// 3) Agregação (resumo executivo + sugestões priorizadas)
-// ---------------------------------------------------------------------------
-async function agregar(
-  detalhes: DetalheConversa[],
-  achadosDet: string[]
-): Promise<{ resumo: string; sugestoes: string[] }> {
-  const problemasFlat = detalhes.flatMap((d) => d.problemas.map((p) => `[${p.gravidade}] ${p.regra}: ${p.descricao}`))
-  const material = `SINAIS DO SISTEMA:\n${achadosDet.join('\n') || '(nenhum)'}\n\nPROBLEMAS NAS CONVERSAS:\n${problemasFlat.join('\n') || '(nenhum)'}`
-
-  const prompt = `Você é o supervisor da Sara (assistente de matrículas). Com base nos achados de hoje abaixo, escreva:
-1. um "resumo" executivo (2-4 frases) do desempenho da Sara hoje;
-2. "sugestoes": lista de 3 a 6 correções CONCRETAS e acionáveis (ajuste de prompt, regra, ou processo), priorizadas por impacto.
-Responda em JSON: {"resumo":"...","sugestoes":["...","..."]}.
+// Roll-up do dia: resumo executivo + sugestões priorizadas (a partir das oportunidades).
+async function agregar(detalhes: DetalheConversa[], achadosDet: string[]): Promise<{ resumo: string; sugestoes: string[] }> {
+  const oport = detalhes.flatMap((d) => d.oportunidades)
+  const material = `SINAIS DO SISTEMA:\n${achadosDet.join('\n') || '(nenhum)'}\n\nOPORTUNIDADES NAS CONVERSAS:\n${oport.join('\n') || '(nenhuma)'}`
+  const prompt = `Você é o supervisor da Sara (assistente de matrículas). Com base nos achados do dia abaixo, escreva um "resumo" executivo (2-4 frases) e "sugestoes": 3 a 6 correções concretas e priorizadas (ajuste de prompt, regra ou processo). Responda em JSON {"resumo":"","sugestoes":[]}.
 
 ${material}`
-
   try {
     const resp = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
@@ -150,12 +200,9 @@ ${material}`
       messages: [{ role: 'user', content: prompt }],
     })
     const j = JSON.parse(resp.choices[0]?.message?.content || '{}')
-    return {
-      resumo: typeof j.resumo === 'string' ? j.resumo : 'Sem resumo.',
-      sugestoes: Array.isArray(j.sugestoes) ? j.sugestoes : [],
-    }
+    return { resumo: S(j.resumo) || 'Sem resumo.', sugestoes: ARR(j.sugestoes).map(S).filter(Boolean) }
   } catch {
-    return { resumo: 'Não foi possível gerar o resumo.', sugestoes: [] }
+    return { resumo: 'Não foi possível gerar o resumo do dia.', sugestoes: [] }
   }
 }
 
@@ -167,7 +214,6 @@ export async function rodarAuditoria(supabase: Supa, horas = 24, maxConversas = 
   const inicio = new Date(fim.getTime() - horas * 60 * 60 * 1000)
   const inicioIso = inicio.toISOString()
 
-  // Leads com atividade da Sara (out_ia) no período
   const { data: msgs } = await supabase
     .from('mensagens')
     .select('lead_id')
@@ -181,25 +227,26 @@ export async function rodarAuditoria(supabase: Supa, horas = 24, maxConversas = 
   for (const leadId of leadIds) {
     const { data: lead } = await supabase
       .from('leads')
-      .select('id, familia:familias(nome_responsavel)')
+      .select('id, familia:familias(nome_responsavel), coluna:colunas(nome)')
       .eq('id', leadId)
       .single()
     const responsavel = (lead as any)?.familia?.nome_responsavel || 'Responsável'
+    const estagio = (lead as any)?.coluna?.nome || ''
 
     const { data: conversa } = await supabase
       .from('mensagens')
-      .select('direcao, conteudo, criado_em')
+      .select('direcao, conteudo')
       .eq('lead_id', leadId)
       .order('criado_em', { ascending: true })
-      .limit(60)
+      .limit(80)
 
     const transcript = (conversa || [])
       .map((m: any) => `${m.direcao === 'in' ? 'Família' : m.direcao === 'out_ia' ? 'Sara' : 'Equipe'}: ${m.conteudo}`)
       .join('\n')
-      .slice(-6000)
+      .slice(-7000)
 
-    const rev = await revisarConversa(responsavel, transcript)
-    detalhes.push({ lead_id: leadId, responsavel, ...rev })
+    const aval = await avaliarConversa(responsavel, estagio, transcript)
+    detalhes.push({ lead_id: leadId, responsavel, ...aval })
   }
 
   const achadosDet = await checagensDeterministicas(supabase, inicioIso)
