@@ -276,14 +276,21 @@ export async function processarMensagemRecebida(
     try {
       const { data: todasColunas } = await supabase
         .from('colunas')
-        .select('id, nome, ordem')
+        .select('id, nome, ordem, funil_id')
         .order('ordem')
 
-      const colunaAtual = todasColunas?.find((c) => c.id === lead!.coluna_id) as SaraColuna | undefined
+      const colunaAtual = todasColunas?.find((c) => c.id === lead!.coluna_id) as
+        | (SaraColuna & { funil_id?: string })
+        | undefined
+      // A Sara só enxerga e só pode mover dentro do MESMO funil do lead — nunca entre funis
+      // (evita, p.ex., mover um lead de captação para uma turma do funil Matriculados).
+      const colunasDoFunil = ((todasColunas || []) as (SaraColuna & { funil_id?: string })[]).filter(
+        (c) => c.funil_id === colunaAtual?.funil_id
+      )
 
       const saraResult = await gerarRespostaSara(
         lead.id,
-        todasColunas as SaraColuna[] | undefined,
+        colunasDoFunil as SaraColuna[] | undefined,
         colunaAtual
       )
 
@@ -453,9 +460,24 @@ export async function processarMensagemRecebida(
       }
 
       // Guard-rails de movimentação
-      if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && todasColunas && colunaAtual) {
-        const proximaColuna = todasColunas.find((c) => c.id === saraResult.proxima_coluna_id)
+      if (saraResult.proxima_coluna_id && lead.sara_pode_mover !== false && colunasDoFunil.length && colunaAtual) {
+        // Busca só entre as colunas do funil do lead: alvo de outro funil nem é encontrado (recusado).
+        const proximaColuna = colunasDoFunil.find((c) => c.id === saraResult.proxima_coluna_id)
         let motivoRecusa: string | null = null
+
+        // "Visita Realizada" só é válida DEPOIS de a visita ter ocorrido (data/hora no passado).
+        let visitaRealizadaCedo = false
+        if (proximaColuna && /visita\s*realizada/i.test(proximaColuna.nome)) {
+          const { data: ultimaVisita } = await supabase
+            .from('tarefas')
+            .select('data_hora')
+            .eq('lead_id', lead.id)
+            .eq('tipo', 'visita')
+            .order('data_hora', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          visitaRealizadaCedo = !ultimaVisita || new Date(ultimaVisita.data_hora as string).getTime() > Date.now()
+        }
 
         if (!proximaColuna) motivoRecusa = 'coluna_inexistente'
         else if (proximaColuna.ordem > colunaAtual.ordem + 1) motivoRecusa = 'pulou_etapas'
@@ -463,6 +485,8 @@ export async function processarMensagemRecebida(
         else if (proximaColuna.nome === 'Matriculados') motivoRecusa = 'matriculados_requer_confirmacao_humana'
         else if (/visita\s*agendada/i.test(proximaColuna.nome) && !saraResult.agendar_visita?.data_hora)
           motivoRecusa = 'visita_sem_agendamento' // #7: só entra em Visita Agendada após agendar de fato
+        else if (/visita\s*realizada/i.test(proximaColuna.nome) && visitaRealizadaCedo)
+          motivoRecusa = 'visita_ainda_nao_ocorreu' // só marca Realizada depois da data/hora da visita
         else if (proximaColuna.nome === 'Perdidos' && !saraResult.razao_movimentacao) motivoRecusa = 'perdidos_sem_razao'
 
         if (motivoRecusa) {
