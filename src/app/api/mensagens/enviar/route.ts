@@ -22,14 +22,18 @@ export async function POST(req: NextRequest) {
   try {
     const wid = await enviarTextoWhatsApp(lead.familia.telefone, texto, lead.familia.whatsapp_phone_number_id)
 
-    // Salva mensagem
-    await supabase.from('mensagens').insert({
+    // Salva mensagem. NÃO gravamos enviado_por com o id de auth: a FK aponta para
+    // a tabela `usuarios` (hoje vazia), então preencher com o id de login violaria
+    // a constraint e a mensagem não seria gravada. A coluna aceita nulo.
+    const { error: errMsg } = await supabase.from('mensagens').insert({
       lead_id,
       direcao: 'out_humano',
       conteudo: texto,
-      enviado_por: user.id,
       whatsapp_message_id: wid,
     })
+    if (errMsg) {
+      return NextResponse.json({ error: `Mensagem enviada, mas falhou ao gravar no histórico: ${errMsg.message}` }, { status: 500 })
+    }
 
     return NextResponse.json({ ok: true })
   } catch (e: unknown) {
