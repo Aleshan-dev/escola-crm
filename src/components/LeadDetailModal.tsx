@@ -22,16 +22,21 @@ const inputCls = 'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm ou
 export function LeadDetailModal({
   lead,
   colunas,
+  funis = [],
   onClose,
 }: {
   lead: Lead
   colunas: Coluna[]
+  funis?: { id: string; nome: string }[]
   onClose: () => void
 }) {
   const supabase = createClient()
   const dias = diasNaEtapa(lead.entrou_coluna_em)
 
   const [colunaId, setColunaId] = useState(lead.coluna_id)
+  const colAtual = colunas.find((c) => c.id === lead.coluna_id)
+  const [funilId, setFunilId] = useState(colAtual?.funil_id || funis[0]?.id || '')
+  const colunasDoFunil = colunas.filter((c) => c.funil_id === funilId).sort((a, b) => a.ordem - b.ordem)
   const [temperatura, setTemperatura] = useState<string>(lead.temperatura)
   const [serie, setSerie] = useState(lead.crianca?.serie_desejada || '')
   const [periodo, setPeriodo] = useState(lead.crianca?.periodo || '')
@@ -126,6 +131,12 @@ export function LeadDetailModal({
       }).catch(() => {})
     }
   }
+  // Transferência manual de funil: move o lead para a primeira etapa do funil escolhido.
+  async function mudarFunil(nf: string) {
+    setFunilId(nf)
+    const primeira = colunas.filter((c) => c.funil_id === nf).sort((a, b) => a.ordem - b.ordem)[0]
+    if (primeira && primeira.id !== colunaId) await mudarColuna(primeira.id)
+  }
   async function mudarTemperatura(t: string) {
     if (t === 'auto') {
       // Volta ao cálculo automático: remove override e recalcula no banco
@@ -187,10 +198,18 @@ export function LeadDetailModal({
 
         <div className="space-y-5 p-5">
           <div className="grid grid-cols-2 gap-3">
+            {funis.length > 1 && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Funil</span>
+                <select value={funilId} onChange={(e) => mudarFunil(e.target.value)} className={`${selCls} w-full`}>
+                  {funis.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                </select>
+              </label>
+            )}
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-500">Etapa</span>
               <select value={colunaId} onChange={(e) => mudarColuna(e.target.value)} className={`${selCls} w-full`}>
-                {colunas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                {colunasDoFunil.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
               </select>
             </label>
             <label className="block">

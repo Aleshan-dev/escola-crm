@@ -367,20 +367,42 @@ export async function processarMensagemRecebida(
         }
       }
 
-      // Agendamento de visita confirmado pela Sara
+      // Agendamento de visita confirmado pela Sara. Se já existe uma visita não
+      // concluída, REAGENDA (atualiza a mesma tarefa) em vez de duplicar.
       if (saraResult.agendar_visita?.data_hora) {
         const dh = new Date(saraResult.agendar_visita.data_hora)
         if (!isNaN(dh.getTime())) {
           const dhIso = dh.toISOString()
-          const { data: jaTem } = await supabase
+          const { data: visitaExistente } = await supabase
             .from('tarefas')
-            .select('id')
+            .select('id, data_hora')
             .eq('lead_id', lead.id)
             .eq('tipo', 'visita')
-            .eq('data_hora', dhIso)
+            .eq('concluida', false)
+            .order('data_hora', { ascending: false })
+            .limit(1)
             .maybeSingle()
 
-          if (!jaTem) {
+          if (visitaExistente) {
+            // Reagendamento: só age se o horário realmente mudou.
+            if (visitaExistente.data_hora !== dhIso) {
+              await supabase.from('tarefas').update({ data_hora: dhIso }).eq('id', visitaExistente.id)
+              await supabase
+                .from('leads')
+                .update({ data_proxima_acao: dhIso, proxima_acao: 'Visita reagendada' })
+                .eq('id', lead.id)
+              await supabase.from('eventos_timeline').insert({
+                lead_id: lead.id,
+                tipo: 'visita_agendada',
+                descricao: `Sara reagendou a visita para ${dhIso}`,
+              })
+              await notificarGestor(
+                supabase,
+                'visita',
+                `🔁 *Visita reagendada pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nNovo horário: ${labelAcre(dh)}`
+              )
+            }
+          } else {
             await supabase.from('tarefas').insert({
               lead_id: lead.id,
               titulo: `Visita — ${familia.nome_responsavel || 'Família'}`,
@@ -414,6 +436,8 @@ export async function processarMensagemRecebida(
         else if (proximaColuna.ordem > colunaAtual.ordem + 1) motivoRecusa = 'pulou_etapas'
         else if (proximaColuna.ordem <= colunaAtual.ordem) motivoRecusa = 'regressao'
         else if (proximaColuna.nome === 'Matriculados') motivoRecusa = 'matriculados_requer_confirmacao_humana'
+        else if (/visita\s*agendada/i.test(proximaColuna.nome) && !saraResult.agendar_visita?.data_hora)
+          motivoRecusa = 'visita_sem_agendamento' // #7: só entra em Visita Agendada após agendar de fato
         else if (proximaColuna.nome === 'Perdidos' && !saraResult.razao_movimentacao) motivoRecusa = 'perdidos_sem_razao'
 
         if (motivoRecusa) {

@@ -201,7 +201,8 @@ export default function KanbanPage() {
       {detalhe && (
         <LeadDetailModal
           lead={detalhe}
-          colunas={colunasDoFunil}
+          colunas={colunas}
+          funis={funis}
           onClose={() => setDetalhe(null)}
         />
       )}
