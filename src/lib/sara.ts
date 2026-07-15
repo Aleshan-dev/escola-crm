@@ -35,6 +35,13 @@ export type SaraCriancaDados = {
   periodo?: string
 }
 
+export type SaraLeadDados = {
+  escola_atual?: string
+  primeira_experiencia?: string
+  motivo_busca?: string
+  quando_iniciar?: string
+}
+
 export type SaraAnalise = {
   intencao: string | null
   emocao: string | null
@@ -52,6 +59,7 @@ export type SaraResposta = {
   familia_dados: SaraFamiliaDados | null
   crianca_dados: SaraCriancaDados | null
   criancas_dados: SaraCriancaDados[] | null // irmãos: um item por criança
+  lead_dados: SaraLeadDados | null // checklist: escola atual, 1ª experiência, motivo, quando iniciar
   transbordo: boolean
   motivo_transbordo: string | null
   agendar_visita: { data_hora: string } | null
@@ -209,6 +217,21 @@ Não há horários de visita disponíveis no momento. Se a família quiser agend
   const criancasFamilia =
     ((dadosFamilia as unknown as { criancas?: Array<{ nome?: string; idade?: number }> })?.criancas) || []
 
+  // Checklist obrigatório do atendimento (o que a Sara precisa descobrir).
+  const L = lead as any
+  const checklist = [
+    { label: 'Nome da criança', ok: !!dadosCrianca?.nome },
+    { label: 'Idade da criança', ok: !!dadosCrianca?.idade },
+    { label: 'Período desejado (Integral/Estendido/Parcial)', ok: !!dadosCrianca?.periodo },
+    { label: 'Escola atual (onde/se estuda hoje)', ok: !!L.escola_atual },
+    { label: 'Primeira experiência em escola?', ok: !!L.primeira_experiencia },
+    { label: 'Motivo da busca / necessidade da família', ok: !!L.motivo_busca },
+    { label: 'Quando pretende iniciar', ok: !!L.quando_iniciar },
+    { label: 'Cidade', ok: !!dadosFamilia?.cidade },
+  ]
+  const checklistTxt = checklist.map((c) => `${c.ok ? '✓' : '✗'} ${c.label}`).join('\n')
+  const faltando = checklist.filter((c) => !c.ok).map((c) => c.label)
+
   // Data de hoje no fuso de Rio Branco/Acre (UTC-5) — para a Sara escrever datas absolutas.
   const hojeAcre = new Date(Date.now() - 5 * 60 * 60 * 1000).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
 
@@ -249,19 +272,35 @@ DADOS JÁ COLETADOS DESTA FAMÍLIA
 ════════════════════════════════
 - Responsável: ${dadosFamilia?.nome_responsavel || 'não informado'}
 - Crianças da família: ${criancasFamilia.length ? criancasFamilia.map((c) => `${c.nome || 'a confirmar'}${c.idade ? ` (${c.idade}a)` : ''}`).join('; ') : (dadosCrianca?.nome || 'não informado')}
-- Criança (principal): ${dadosCrianca?.nome || 'não informado'}
-- Idade: ${dadosCrianca?.idade ? `${dadosCrianca.idade} anos` : 'não informado'}
-- Série desejada: ${dadosCrianca?.serie_desejada || 'não informado'}
+- Idade (principal): ${dadosCrianca?.idade ? `${dadosCrianca.idade} anos` : 'não informado'}
 - Período desejado: ${dadosCrianca?.periodo || 'não informado'}
+- Escola atual: ${L.escola_atual || 'não informado'}
+- Primeira experiência: ${L.primeira_experiencia || 'não informado'}
+- Motivo da busca: ${L.motivo_busca || 'não informado'}
+- Quando pretende iniciar: ${L.quando_iniciar || 'não informado'}
+- Cidade: ${dadosFamilia?.cidade || 'não informado'}
 
-DADOS OBRIGATÓRIOS FALTANDO (colete um por vez):
-${!dadosCrianca?.nome ? '- Nome da criança\n' : ''}${!dadosCrianca?.idade ? '- Idade da criança\n' : ''}${!dadosCrianca?.serie_desejada ? '- Série/turma desejada\n' : ''}${!dadosCrianca?.periodo ? '- Período desejado\n' : ''}
+════════════════════════════════
+CHECKLIST OBRIGATÓRIO (descubra TUDO isto ao longo da conversa — um de cada vez, de forma natural, sem interrogatório)
+════════════════════════════════
+${checklistTxt}
+${faltando.length ? `AINDA FALTA descobrir: ${faltando.join(', ')}.` : 'Checklist completo ✓ — pode avançar para o convite da visita.'}
+- Ao descobrir, GRAVE: dados da criança em "crianca_dados"; escola atual / primeira experiência / motivo da busca / quando pretende iniciar em "lead_dados"; cidade em "familia_dados.cidade".
+
+════════════════════════════════
+FLUXO DO ATENDIMENTO — SIGA ESTA ORDEM (não pule etapas)
+════════════════════════════════
+1. ACOLHER e descobrir a CRIANÇA primeiro (nome e idade). Sem isso, não personalize nem avance.
+2. DESCOBRIR A NECESSIDADE real: motivo da busca, rotina da família (os pais trabalham? quem cuida da criança hoje?), se ela já estuda (escola atual), se é a primeira experiência e quando pretende iniciar. Faça perguntas abertas e ESCUTE — não mude de assunto quando a família responder.
+3. CRIAR CONEXÃO: valide emocionalmente o que a família trouxe antes de seguir (ex.: "Entendo, [nome]. Muitas famílias procuram o integral justamente para conciliar o trabalho com um ambiente seguro e acolhedor para os filhos.").
+4. CONSTRUIR VALOR CONTEXTUALIZADO à necessidade dela — NUNCA genérico. Explique POR QUE o diferencial ajuda AQUELA família (ex.: turmas reduzidas = mais atenção individual na adaptação de uma criança pequena).
+5. SÓ ENTÃO convide para a VISITA, como passo natural, quando houver interesse real. NUNCA ofereça horários de visita antes de entender a necessidade e perceber interesse — a visita não é automática.
 
 ════════════════════════════════
 CONDUTA OBRIGATÓRIA DO ATENDIMENTO
 ════════════════════════════════
 1. PERSONALIZE sempre. Chame o responsável pelo primeiro nome ("${(dadosFamilia?.nome_responsavel || '').split(' ')[0] || 'responsável'}") e use nome/idade/série da criança já conhecidos. DEDUZA o gênero do responsável pelo primeiro nome e trate no gênero certo (nome feminino → "seja bem-vinda", "a senhora"; masculino → "seja bem-vindo", "o senhor"). Se o nome for ambíguo, use uma saudação neutra. NUNCA recomece a conversa do zero quando já há dados coletados — retome de onde parou. ATENÇÃO AO NOME DO RESPONSÁVEL: o nome mostrado pode ser só o nome do PERFIL do WhatsApp — muitas vezes um apelido ou o nome da própria CRIANÇA, não o nome do pai/mãe. NÃO assuma. Se o "nome do responsável" for igual (ou muito parecido) ao nome da criança, está errado: pergunte com quem você fala ("Como posso te chamar?") e grave o nome real em familia_dados.nome_responsavel. NUNCA chame o pai/mãe pelo nome da criança.
-2. EXIJA OS DADOS OBRIGATÓRIOS antes de avançar o lead: nome da criança, idade, série/turma desejada e período. Peça UM de cada vez, de forma acolhedora, e NÃO avance de etapa enquanto faltar algum obrigatório.
+2. CHECKLIST — descubra os itens obrigatórios do checklist acima ao longo da conversa (um de cada vez, sem interrogatório). Priorize nome/idade da criança e a NECESSIDADE da família. Não avance de etapa nem convide para a visita enquanto não entender a necessidade real.
 3. VISITA — só sinalize movimentação para "Visita Agendada" DEPOIS de a família CONFIRMAR uma data/horário específico E você preencher "agendar_visita". NUNCA mova para "Visita Agendada" só porque a família demonstrou interesse em visitar; primeiro agende.
 4. REAGENDAMENTO — se a família pedir para MUDAR a data/horário de uma visita já marcada, preencha "agendar_visita" com o NOVO horário. O sistema ATUALIZA a visita existente (não crie uma segunda). Confirme o novo horário com clareza.
 5. IRMÃOS — se a família tiver MAIS DE UMA criança, pergunte e colete os dados (nome, idade, série, período) de CADA uma e devolva TODAS no campo "criancas_dados" (um item por criança). Não misture os dados de irmãos.
@@ -276,6 +315,7 @@ GESTÃO DE OBJEÇÕES (acolha, nunca discuta):
 - "Vou pensar": acolha, pergunte gentilmente o que ainda pesa na decisão e mantenha a porta aberta, sem pressionar.
 - Horário de trabalho: destaque os períodos (Integral/Estendido/Parcial) que resolvem a rotina da família.
 VARIEDADE: varie as aberturas e evite repetir as mesmas fórmulas ("Que lindo!", "Perfeito!") em toda mensagem. Soe humana e natural, não um roteiro.
+BREVIDADE (IMPORTANTE): responda em NO MÁXIMO 2 mensagens curtas por vez — de preferência UMA. Uma ideia ou UMA pergunta por vez. NÃO fragmente demais nem repita a mesma informação em mensagens separadas. Evite mandar vários balões seguidos; seja objetiva e acolhedora.
 ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
@@ -312,6 +352,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
   "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral" } ou null,
   "criancas_dados": [ { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral" } ] ou null,
+  "lead_dados": { "escola_atual": "...", "primeira_experiencia": "sim/não", "motivo_busca": "...", "quando_iniciar": "..." } ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
   "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,
@@ -360,6 +401,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
       familia_dados: parsed.familia_dados ?? null,
       crianca_dados: parsed.crianca_dados ?? null,
       criancas_dados: Array.isArray(parsed.criancas_dados) ? parsed.criancas_dados : null,
+      lead_dados: parsed.lead_dados ?? null,
       transbordo: parsed.transbordo === true,
       motivo_transbordo: parsed.motivo_transbordo ?? null,
       agendar_visita:
@@ -388,6 +430,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
       familia_dados: null,
       crianca_dados: null,
       criancas_dados: null,
+      lead_dados: null,
       transbordo: false,
       motivo_transbordo: null,
       agendar_visita: null,

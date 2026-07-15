@@ -31,7 +31,7 @@ export function dividirEmBaloes(texto: string): string[] {
     if (atual) baloes.push(atual)
   }
 
-  return baloes.map((b) => b.trim()).filter(Boolean).slice(0, 3)
+  return baloes.map((b) => b.trim()).filter(Boolean).slice(0, 2)
 }
 
 /**
@@ -336,6 +336,19 @@ export async function processarMensagemRecebida(
         if (fd.estado) update.estado = fd.estado
         if (Object.keys(update).length > 0) {
           await supabase.from('familias').update(update).eq('id', familia.id)
+        }
+      }
+
+      // Checklist do atendimento (dados do lead): escola atual, 1ª experiência, motivo, quando iniciar.
+      if (saraResult.lead_dados) {
+        const ld = saraResult.lead_dados
+        const up: Record<string, string> = {}
+        if (ld.escola_atual) up.escola_atual = ld.escola_atual
+        if (ld.primeira_experiencia) up.primeira_experiencia = ld.primeira_experiencia
+        if (ld.motivo_busca) up.motivo_busca = ld.motivo_busca
+        if (ld.quando_iniciar) up.quando_iniciar = ld.quando_iniciar
+        if (Object.keys(up).length > 0) {
+          await supabase.from('leads').update(up).eq('id', lead.id)
         }
       }
 

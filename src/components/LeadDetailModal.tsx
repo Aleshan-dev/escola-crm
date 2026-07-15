@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { Coluna, Lead } from '@/lib/types'
 import { createClient } from '@/lib/supabase-browser'
-import { X, Bot, MessageSquare, Phone, Mail, Baby, FileText, CheckSquare, Square, Trash2, Plus } from 'lucide-react'
+import { X, Bot, MessageSquare, Phone, Mail, Baby, FileText, CheckSquare, Square, Trash2, Plus, ListChecks, CheckCircle2, Circle } from 'lucide-react'
 import Link from 'next/link'
 
 function diasNaEtapa(entrou: string): number {
@@ -40,6 +40,14 @@ export function LeadDetailModal({
   const colunasDoFunil = colunas.filter((c) => c.funil_id === funilId).sort((a, b) => a.ordem - b.ordem)
   const [temperatura, setTemperatura] = useState<string>(lead.temperatura)
   const [criancasLista, setCriancasLista] = useState<CriancaRow[]>([])
+
+  // Checklist de atendimento (campos do lead + cidade da família)
+  const L = lead as any
+  const [escolaAtual, setEscolaAtual] = useState<string>(L.escola_atual || '')
+  const [primeiraExp, setPrimeiraExp] = useState<string>(L.primeira_experiencia || '')
+  const [motivoBusca, setMotivoBusca] = useState<string>(L.motivo_busca || '')
+  const [quandoIniciar, setQuandoIniciar] = useState<string>(L.quando_iniciar || '')
+  const [cidade, setCidade] = useState<string>((lead.familia as any)?.cidade || '')
 
   const [seriesList, setSeriesList] = useState<Serie[]>([])
   const [turnosList, setTurnosList] = useState<{ nome: string }[]>([])
@@ -149,6 +157,12 @@ export function LeadDetailModal({
     setTemperatura(t)
     // Ajuste manual: marca override para o cálculo automático não sobrescrever
     await supabase.from('leads').update({ temperatura: t, temperatura_manual: true }).eq('id', lead.id)
+  }
+  async function salvarLeadCampo(campos: Record<string, any>) {
+    await supabase.from('leads').update(campos).eq('id', lead.id)
+  }
+  async function salvarCidade(v: string) {
+    if (lead.familia_id) await supabase.from('familias').update({ cidade: v || null }).eq('id', lead.familia_id)
   }
   async function carregarCriancas() {
     if (!lead.familia_id) return
@@ -306,6 +320,35 @@ export function LeadDetailModal({
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Checklist de atendimento */}
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700"><ListChecks className="w-4 h-4 text-slate-400" />Checklist de atendimento</div>
+            <div className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1">
+              {[
+                { label: 'Nome da criança', ok: criancasLista.some((c) => (c.nome || '').trim()) },
+                { label: 'Idade', ok: criancasLista.some((c) => c.idade != null) },
+                { label: 'Período', ok: criancasLista.some((c) => c.periodo) },
+                { label: 'Escola atual', ok: !!escolaAtual },
+                { label: 'Primeira experiência', ok: !!primeiraExp },
+                { label: 'Motivo da busca', ok: !!motivoBusca },
+                { label: 'Quando iniciar', ok: !!quandoIniciar },
+                { label: 'Cidade', ok: !!cidade },
+              ].map((it) => (
+                <div key={it.label} className="flex items-center gap-1.5 text-xs">
+                  {it.ok ? <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-green-600" /> : <Circle className="w-3.5 h-3.5 flex-shrink-0 text-slate-300" />}
+                  <span className={it.ok ? 'text-slate-700' : 'text-slate-400'}>{it.label}</span>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <input value={escolaAtual} onChange={(e) => setEscolaAtual(e.target.value)} onBlur={() => salvarLeadCampo({ escola_atual: escolaAtual || null })} placeholder="Escola atual" className={inputCls} />
+              <input value={primeiraExp} onChange={(e) => setPrimeiraExp(e.target.value)} onBlur={() => salvarLeadCampo({ primeira_experiencia: primeiraExp || null })} placeholder="Primeira experiência?" className={inputCls} />
+              <input value={motivoBusca} onChange={(e) => setMotivoBusca(e.target.value)} onBlur={() => salvarLeadCampo({ motivo_busca: motivoBusca || null })} placeholder="Motivo da busca" className={inputCls} />
+              <input value={quandoIniciar} onChange={(e) => setQuandoIniciar(e.target.value)} onBlur={() => salvarLeadCampo({ quando_iniciar: quandoIniciar || null })} placeholder="Quando pretende iniciar" className={inputCls} />
+              <input value={cidade} onChange={(e) => setCidade(e.target.value)} onBlur={() => salvarCidade(cidade)} placeholder="Cidade" className={`${inputCls} col-span-2`} />
+            </div>
           </div>
 
           {(lead.cog_intencao || lead.cog_temperatura || lead.cog_proxima_acao) && (
