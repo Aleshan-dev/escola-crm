@@ -8,7 +8,10 @@ import { registrarAlerta } from '@/lib/alertas'
 // via GitHub Actions é suficiente (custo desprezível de minutos).
 
 export async function GET(req: NextRequest) {
-  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+  const autorizado =
+    req.headers.get('x-vercel-cron') === '1' ||
+    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  if (!autorizado) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
 

@@ -50,6 +50,7 @@ export type SaraResposta = {
   razao_movimentacao: string | null
   familia_dados: SaraFamiliaDados | null
   crianca_dados: SaraCriancaDados | null
+  criancas_dados: SaraCriancaDados[] | null // irmãos: um item por criança
   transbordo: boolean
   motivo_transbordo: string | null
   agendar_visita: { data_hora: string } | null
@@ -68,7 +69,7 @@ export async function gerarRespostaSara(
 
   const { data: lead } = await supabase
     .from('leads')
-    .select('*, familia:familias(*), crianca:criancas(*)')
+    .select('*, familia:familias(*, criancas(*)), crianca:criancas(*)')
     .eq('id', leadId)
     .single()
 
@@ -201,6 +202,8 @@ Não há horários de visita disponíveis no momento. Se a família quiser agend
 
   const dadosFamilia = lead.familia
   const dadosCrianca = lead.crianca
+  const criancasFamilia =
+    ((dadosFamilia as unknown as { criancas?: Array<{ nome?: string; idade?: number }> })?.criancas) || []
 
   // Data de hoje no fuso de Rio Branco/Acre (UTC-5) — para a Sara escrever datas absolutas.
   const hojeAcre = new Date(Date.now() - 5 * 60 * 60 * 1000).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
@@ -241,7 +244,8 @@ ${blocoVagas}
 DADOS JÁ COLETADOS DESTA FAMÍLIA
 ════════════════════════════════
 - Responsável: ${dadosFamilia?.nome_responsavel || 'não informado'}
-- Criança: ${dadosCrianca?.nome || 'não informado'}
+- Crianças da família: ${criancasFamilia.length ? criancasFamilia.map((c) => `${c.nome || 'a confirmar'}${c.idade ? ` (${c.idade}a)` : ''}`).join('; ') : (dadosCrianca?.nome || 'não informado')}
+- Criança (principal): ${dadosCrianca?.nome || 'não informado'}
 - Idade: ${dadosCrianca?.idade ? `${dadosCrianca.idade} anos` : 'não informado'}
 - Série desejada: ${dadosCrianca?.serie_desejada || 'não informado'}
 - Período desejado: ${dadosCrianca?.periodo || 'não informado'}
@@ -256,6 +260,7 @@ CONDUTA OBRIGATÓRIA DO ATENDIMENTO
 2. EXIJA OS DADOS OBRIGATÓRIOS antes de avançar o lead: nome da criança, idade, série/turma desejada e período. Peça UM de cada vez, de forma acolhedora, e NÃO avance de etapa enquanto faltar algum obrigatório.
 3. VISITA — só sinalize movimentação para "Visita Agendada" DEPOIS de a família CONFIRMAR uma data/horário específico E você preencher "agendar_visita". NUNCA mova para "Visita Agendada" só porque a família demonstrou interesse em visitar; primeiro agende.
 4. REAGENDAMENTO — se a família pedir para MUDAR a data/horário de uma visita já marcada, preencha "agendar_visita" com o NOVO horário. O sistema ATUALIZA a visita existente (não crie uma segunda). Confirme o novo horário com clareza.
+5. IRMÃOS — se a família tiver MAIS DE UMA criança, pergunte e colete os dados (nome, idade, série, período) de CADA uma e devolva TODAS no campo "criancas_dados" (um item por criança). Não misture os dados de irmãos.
 ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
@@ -291,6 +296,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "razao_movimentacao": "texto ou null",
   "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
   "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral" } ou null,
+  "criancas_dados": [ { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral" } ] ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
   "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,
@@ -338,6 +344,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
       razao_movimentacao: parsed.razao_movimentacao ?? null,
       familia_dados: parsed.familia_dados ?? null,
       crianca_dados: parsed.crianca_dados ?? null,
+      criancas_dados: Array.isArray(parsed.criancas_dados) ? parsed.criancas_dados : null,
       transbordo: parsed.transbordo === true,
       motivo_transbordo: parsed.motivo_transbordo ?? null,
       agendar_visita:
@@ -365,6 +372,7 @@ Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o qu
       razao_movimentacao: null,
       familia_dados: null,
       crianca_dados: null,
+      criancas_dados: null,
       transbordo: false,
       motivo_transbordo: null,
       agendar_visita: null,

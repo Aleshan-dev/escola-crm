@@ -12,6 +12,7 @@ function diasNaEtapa(entrou: string): number {
 }
 
 type Serie = { id: string; nome: string }
+type CriancaRow = { id: string; nome: string; idade: number | null; serie_desejada: string | null; periodo: string | null }
 type Tarefa = { id: string; titulo: string; tipo: string | null; data_hora: string; concluida: boolean }
 type Anotacao = { id: string; conteudo: string; criado_em: string }
 
@@ -38,8 +39,7 @@ export function LeadDetailModal({
   const [funilId, setFunilId] = useState(colAtual?.funil_id || funis[0]?.id || '')
   const colunasDoFunil = colunas.filter((c) => c.funil_id === funilId).sort((a, b) => a.ordem - b.ordem)
   const [temperatura, setTemperatura] = useState<string>(lead.temperatura)
-  const [serie, setSerie] = useState(lead.crianca?.serie_desejada || '')
-  const [periodo, setPeriodo] = useState(lead.crianca?.periodo || '')
+  const [criancasLista, setCriancasLista] = useState<CriancaRow[]>([])
 
   const [seriesList, setSeriesList] = useState<Serie[]>([])
   const [turnosList, setTurnosList] = useState<{ nome: string }[]>([])
@@ -115,6 +115,7 @@ export function LeadDetailModal({
     })
     carregarAnotacoes()
     carregarTarefas()
+    carregarCriancas()
     return () => { ativo = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id])
@@ -149,13 +150,35 @@ export function LeadDetailModal({
     // Ajuste manual: marca override para o cálculo automático não sobrescrever
     await supabase.from('leads').update({ temperatura: t, temperatura_manual: true }).eq('id', lead.id)
   }
-  async function mudarSerie(s: string) {
-    setSerie(s)
-    if (lead.crianca_id) await supabase.from('criancas').update({ serie_desejada: s || null }).eq('id', lead.crianca_id)
+  async function carregarCriancas() {
+    if (!lead.familia_id) return
+    const { data } = await supabase
+      .from('criancas')
+      .select('id, nome, idade, serie_desejada, periodo')
+      .eq('familia_id', lead.familia_id)
+      .order('criado_em')
+    setCriancasLista((data as unknown as CriancaRow[]) || [])
   }
-  async function mudarPeriodo(p: string) {
-    setPeriodo(p)
-    if (lead.crianca_id) await supabase.from('criancas').update({ periodo: p || null }).eq('id', lead.crianca_id)
+  async function atualizarCrianca(id: string, campos: Partial<CriancaRow>) {
+    setCriancasLista((prev) => prev.map((c) => (c.id === id ? { ...c, ...campos } : c)))
+    await supabase.from('criancas').update(campos).eq('id', id)
+  }
+  async function addCrianca() {
+    if (!lead.familia_id) return
+    const { data } = await supabase
+      .from('criancas')
+      .insert({ familia_id: lead.familia_id, nome: 'Nova criança' })
+      .select('id, nome, idade, serie_desejada, periodo')
+      .single()
+    if (data) setCriancasLista((prev) => [...prev, data as unknown as CriancaRow])
+  }
+  async function removerCrianca(id: string) {
+    await supabase.from('criancas').delete().eq('id', id)
+    const resto = criancasLista.filter((c) => c.id !== id)
+    setCriancasLista(resto)
+    if (lead.crianca_id === id) {
+      await supabase.from('leads').update({ crianca_id: resto[0]?.id ?? null }).eq('id', lead.id)
+    }
   }
 
   async function addTarefa() {
@@ -221,26 +244,6 @@ export function LeadDetailModal({
                 <option value="quente">Quente</option>
               </select>
             </label>
-            {lead.crianca && (
-              <>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-slate-500">Série</span>
-                  <select value={serie} onChange={(e) => mudarSerie(e.target.value)} className={`${selCls} w-full`}>
-                    <option value="">—</option>
-                    {seriesList.map((s) => <option key={s.id} value={s.nome}>{s.nome}</option>)}
-                    {serie && !seriesList.some((s) => s.nome === serie) && <option value={serie}>{serie}</option>}
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-slate-500">Período</span>
-                  <select value={periodo} onChange={(e) => mudarPeriodo(e.target.value)} className={`${selCls} w-full`}>
-                    <option value="">—</option>
-                    {turnosList.map((t) => <option key={t.nome} value={t.nome}>{t.nome}</option>)}
-                    {periodo && !turnosList.some((t) => t.nome === periodo) && <option value={periodo}>{periodo}</option>}
-                  </select>
-                </label>
-              </>
-            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -252,7 +255,40 @@ export function LeadDetailModal({
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2 text-slate-700"><Phone className="w-4 h-4 text-slate-400" />{lead.familia?.telefone || '—'}</div>
             {lead.familia?.email && <div className="flex items-center gap-2 text-slate-700"><Mail className="w-4 h-4 text-slate-400" />{lead.familia.email}</div>}
-            {lead.crianca?.idade != null && <div className="flex items-center gap-2 text-slate-700"><Baby className="w-4 h-4 text-slate-400" />{lead.crianca.idade} anos</div>}
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-700"><Baby className="w-4 h-4 text-slate-400" />Crianças</div>
+              <button onClick={addCrianca} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"><Plus className="w-3.5 h-3.5" />Adicionar</button>
+            </div>
+            {criancasLista.length === 0 ? (
+              <p className="text-xs text-slate-400">Nenhuma criança cadastrada.</p>
+            ) : (
+              <div className="space-y-2">
+                {criancasLista.map((c) => (
+                  <div key={c.id} className="rounded-lg border border-slate-200 p-2.5 space-y-2">
+                    <div className="flex gap-2">
+                      <input defaultValue={c.nome || ''} onBlur={(e) => atualizarCrianca(c.id, { nome: e.target.value })} placeholder="Nome" className={`${inputCls} flex-1`} />
+                      <input defaultValue={c.idade ?? ''} onBlur={(e) => atualizarCrianca(c.id, { idade: e.target.value ? Number(e.target.value) : null })} placeholder="Idade" inputMode="numeric" className={`${inputCls} w-16`} />
+                      <button onClick={() => removerCrianca(c.id)} className="text-slate-400 hover:text-red-600" aria-label="Remover criança"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select value={c.serie_desejada || ''} onChange={(e) => atualizarCrianca(c.id, { serie_desejada: e.target.value || null })} className={`${selCls} w-full`}>
+                        <option value="">Série —</option>
+                        {seriesList.map((s) => <option key={s.id} value={s.nome}>{s.nome}</option>)}
+                        {c.serie_desejada && !seriesList.some((s) => s.nome === c.serie_desejada) && <option value={c.serie_desejada}>{c.serie_desejada}</option>}
+                      </select>
+                      <select value={c.periodo || ''} onChange={(e) => atualizarCrianca(c.id, { periodo: e.target.value || null })} className={`${selCls} w-full`}>
+                        <option value="">Período —</option>
+                        {turnosList.map((t) => <option key={t.nome} value={t.nome}>{t.nome}</option>)}
+                        {c.periodo && !turnosList.some((t) => t.nome === c.periodo) && <option value={c.periodo}>{c.periodo}</option>}
+                      </select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {(lead.cog_intencao || lead.cog_temperatura || lead.cog_proxima_acao) && (

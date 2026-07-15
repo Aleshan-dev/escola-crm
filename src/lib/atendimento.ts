@@ -332,22 +332,43 @@ export async function processarMensagemRecebida(
         }
       }
 
-      // Criança
-      if (saraResult.crianca_dados) {
-        const cd = saraResult.crianca_dados
-        if (cd.nome || cd.idade || cd.serie_desejada || cd.periodo) {
-          if (lead.crianca_id) {
-            const update: Record<string, string | number> = {}
-            if (cd.nome) update.nome = cd.nome
-            if (cd.idade) update.idade = cd.idade
-            if (cd.data_nascimento) update.data_nascimento = cd.data_nascimento
-            if (cd.serie_desejada) update.serie_desejada = cd.serie_desejada
-            if (cd.periodo) update.periodo = cd.periodo
-            if (Object.keys(update).length > 0) {
-              await supabase.from('criancas').update(update).eq('id', lead.crianca_id)
-            }
+      // Crianças (uma ou várias — irmãos). Casa pelo nome entre as crianças já
+      // cadastradas da família: atualiza a existente ou cria uma nova. Mantém o
+      // lead apontando para a primeira criança (compatibilidade com a UI atual).
+      const listaCriancas =
+        saraResult.criancas_dados && saraResult.criancas_dados.length
+          ? saraResult.criancas_dados
+          : saraResult.crianca_dados
+            ? [saraResult.crianca_dados]
+            : []
+
+      if (listaCriancas.length) {
+        const { data: jaCadastradas } = await supabase
+          .from('criancas')
+          .select('id, nome')
+          .eq('familia_id', familia.id)
+        const porNome = new Map<string, string>(
+          (jaCadastradas || []).map((c) => [((c.nome as string) || '').trim().toLowerCase(), c.id as string])
+        )
+        let primeiroId: string | null = lead.crianca_id ?? null
+
+        for (const cd of listaCriancas) {
+          if (!cd) continue
+          if (!cd.nome && !cd.idade && !cd.serie_desejada && !cd.periodo) continue
+          const chave = (cd.nome || '').trim().toLowerCase()
+          const existenteId = chave ? porNome.get(chave) : undefined
+          const campos: Record<string, string | number> = {}
+          if (cd.nome) campos.nome = cd.nome
+          if (cd.idade) campos.idade = cd.idade
+          if (cd.data_nascimento) campos.data_nascimento = cd.data_nascimento
+          if (cd.serie_desejada) campos.serie_desejada = cd.serie_desejada
+          if (cd.periodo) campos.periodo = cd.periodo
+
+          if (existenteId) {
+            if (Object.keys(campos).length > 0) await supabase.from('criancas').update(campos).eq('id', existenteId)
+            primeiroId = primeiroId || existenteId
           } else {
-            const { data: novaCrianca } = await supabase
+            const { data: nova } = await supabase
               .from('criancas')
               .insert({
                 familia_id: familia.id,
@@ -359,11 +380,15 @@ export async function processarMensagemRecebida(
               })
               .select('id')
               .single()
-
-            if (novaCrianca) {
-              await supabase.from('leads').update({ crianca_id: novaCrianca.id }).eq('id', lead.id)
+            if (nova) {
+              if (chave) porNome.set(chave, nova.id)
+              primeiroId = primeiroId || nova.id
             }
           }
+        }
+
+        if (primeiroId && primeiroId !== lead.crianca_id) {
+          await supabase.from('leads').update({ crianca_id: primeiroId }).eq('id', lead.id)
         }
       }
 

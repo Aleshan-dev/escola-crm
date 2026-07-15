@@ -1,5 +1,7 @@
 {
   "crons": [
-    { "path": "/api/cron/followup", "schedule": "0 * * * *" }
+    { "path": "/api/cron/followup", "schedule": "0 * * * *" },
+    { "path": "/api/cron/google-watch-renew", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/google-sync", "schedule": "30 9 * * *" }
   ]
 }

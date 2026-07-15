@@ -5,11 +5,10 @@ name: Cron Sara (follow-up)
 # ADR-006: o sync do Google Calendar SAIU daqui — agora é por push notification
 # (webhook), não polling. Ver .github/workflows/google-daily.yml para a renovação
 # do canal + rede de segurança diária.
-# Requer o secret CRON_SECRET no repositório (mesmo valor que os endpoints validam).
-# Cada passo FALHA se a resposta não for HTTP 200 — o GitHub notifica o dono por e-mail.
+# DESATIVADO (agendamento): o cron agora roda 100% na Vercel (ver vercel.json),
+# que não consome minutos do GitHub Actions. Mantido só o disparo manual como
+# rede de segurança. Requer o secret CRON_SECRET se for disparado manualmente.
 on:
-  schedule:
-    - cron: '*/20 * * * *'
   workflow_dispatch: {}
 
 jobs:

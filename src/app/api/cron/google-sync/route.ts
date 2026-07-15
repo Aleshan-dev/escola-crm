@@ -9,7 +9,10 @@ import { getGoogleToken, pushTarefaParaGoogle, puxarEventosDoGoogle } from '@/li
 // disparado por um trigger no Postgres) e /api/google/webhook (push notifications do Google).
 
 export async function GET(req: NextRequest) {
-  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+  const autorizado =
+    req.headers.get('x-vercel-cron') === '1' ||
+    req.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
+  if (!autorizado) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
 

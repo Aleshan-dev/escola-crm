@@ -4,10 +4,9 @@ name: Google Calendar (renovação de canal + rede de segurança)
 # (webhook em /api/google/webhook). Este workflow só faz duas coisas 1x/dia:
 # 1) renova o canal de watch antes de expirar (Google limita a ~30 dias de vida);
 # 2) roda um resync completo como rede de segurança, caso alguma notificação se perca.
-# Requer o secret CRON_SECRET no repositório.
+# DESATIVADO (agendamento): agora roda 100% na Vercel (ver vercel.json). Mantido
+# só o disparo manual. Requer o secret CRON_SECRET se for disparado manualmente.
 on:
-  schedule:
-    - cron: '0 9 * * *' # 9h UTC = ~5h/6h Acre — fora do horário comercial
   workflow_dispatch: {}
 
 jobs:
