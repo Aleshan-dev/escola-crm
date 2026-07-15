@@ -2,6 +2,7 @@
 
 import { Topbar } from '@/components/Topbar'
 import { BotaoRodarCron } from '@/components/BotaoRodarCron'
+import { BotaoCriarTemplate } from '@/components/BotaoCriarTemplate'
 import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
@@ -97,7 +98,10 @@ export default function ConfiguracoesPage() {
 
           <section>
             <h2 className="text-sm font-semibold text-slate-700 mb-3">Manutenção</h2>
-            <BotaoRodarCron />
+            <div className="space-y-3">
+              <BotaoRodarCron />
+              <BotaoCriarTemplate />
+            </div>
           </section>
         </div>
       </div>
