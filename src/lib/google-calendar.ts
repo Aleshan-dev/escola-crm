@@ -203,6 +203,23 @@ export async function puxarEventosDoGoogle(
   return { pull, canceladas, modo }
 }
 
+// Sincroniza do Google ANTES de a Sara calcular disponibilidade e oferecer datas.
+// Puxa eventos com cache curto (no máx. 1 pull a cada 90s) para não oferecer um
+// horário que já foi ocupado direto no Google Agenda. Falha silenciosa: se o Google
+// estiver indisponível, a disponibilidade cai para os dados locais.
+let _ultimoPullDisponibilidade = 0
+export async function sincronizarGoogleParaDisponibilidade(supabase: Supabase): Promise<void> {
+  if (Date.now() - _ultimoPullDisponibilidade < 90_000) return
+  try {
+    const ctx = await getGoogleToken(supabase)
+    if (!ctx) return
+    await puxarEventosDoGoogle(supabase, ctx.token, ctx.calendarId)
+    _ultimoPullDisponibilidade = Date.now()
+  } catch (e) {
+    console.error('[google] sync p/ disponibilidade falhou:', e instanceof Error ? e.message : e)
+  }
+}
+
 /** Registra (ou renova, se faltar <24h pra expirar) o canal de push notifications do Google Calendar. */
 export async function registrarOuRenovarWatch(
   supabase: Supabase,

@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
+import { sincronizarGoogleParaDisponibilidade } from '@/lib/google-calendar'
 import { getOcupacaoDireta } from '@/lib/sgei'
 
 let _openai: OpenAI | null = null
@@ -181,6 +182,9 @@ ANOTAÇÕES INTERNAS DA EQUIPE SOBRE ESTE LEAD
 ${listaAnotacoes}`
     : ''
 
+  // Antes de calcular a disponibilidade, puxa do Google (cache de 90s) para não
+  // oferecer horário já ocupado direto no Google Agenda.
+  await sincronizarGoogleParaDisponibilidade(supabase)
   // Horários de visita realmente livres (cruza horarios_visita x tarefas/Google)
   const slots = await calcularSlotsDisponiveis(supabase, { quantidade: 2 })
   const blocoAgenda =
