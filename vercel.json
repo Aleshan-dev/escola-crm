@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/followup", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/google-watch-renew", "schedule": "0 9 * * *" }
+    { "path": "/api/cron/google-watch-renew", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/auditoria-sara", "schedule": "0 11 * * *" }
   ]
 }
