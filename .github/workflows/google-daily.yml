@@ -1,0 +1,34 @@
+name: Google Calendar (renovação de canal + rede de segurança)
+
+# ADR-006: o sync do Google Calendar deixou de ser polling e virou push notification
+# (webhook em /api/google/webhook). Este workflow só faz duas coisas 1x/dia:
+# 1) renova o canal de watch antes de expirar (Google limita a ~30 dias de vida);
+# 2) roda um resync completo como rede de segurança, caso alguma notificação se perca.
+# Requer o secret CRON_SECRET no repositório.
+on:
+  schedule:
+    - cron: '0 9 * * *' # 9h UTC = ~5h/6h Acre — fora do horário comercial
+  workflow_dispatch: {}
+
+jobs:
+  google:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Renovar canal de watch
+        run: |
+          code=$(curl -sS -o /tmp/watch.txt -w "%{http_code}" -X GET \
+            "https://escola-crm.vercel.app/api/cron/google-watch-renew" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "watch-renew -> HTTP $code"
+          cat /tmp/watch.txt || true
+          test "$code" = "200"
+
+      - name: Resync completo (rede de segurança)
+        if: always()
+        run: |
+          code=$(curl -sS -o /tmp/gsync.txt -w "%{http_code}" -X GET \
+            "https://escola-crm.vercel.app/api/cron/google-sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "google-sync -> HTTP $code"
+          cat /tmp/gsync.txt || true
+          test "$code" = "200"
