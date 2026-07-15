@@ -1,6 +1,7 @@
 'use client'
 
 import { Topbar } from '@/components/Topbar'
+import { BotaoRodarCron } from '@/components/BotaoRodarCron'
 import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
@@ -93,6 +94,11 @@ export default function ConfiguracoesPage() {
               </div>
             </section>
           ))}
+
+          <section>
+            <h2 className="text-sm font-semibold text-slate-700 mb-3">Manutenção</h2>
+            <BotaoRodarCron />
+          </section>
         </div>
       </div>
     </div>
