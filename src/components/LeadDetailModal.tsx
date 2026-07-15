@@ -159,6 +159,10 @@ export function LeadDetailModal({
       .order('criado_em')
     setCriancasLista((data as unknown as CriancaRow[]) || [])
   }
+  // Atualiza só o estado local (enquanto digita), sem gravar no banco.
+  function editarCriancaLocal(id: string, campos: Partial<CriancaRow>) {
+    setCriancasLista((prev) => prev.map((c) => (c.id === id ? { ...c, ...campos } : c)))
+  }
   async function atualizarCrianca(id: string, campos: Partial<CriancaRow>) {
     setCriancasLista((prev) => prev.map((c) => (c.id === id ? { ...c, ...campos } : c)))
     await supabase.from('criancas').update(campos).eq('id', id)
@@ -167,7 +171,7 @@ export function LeadDetailModal({
     if (!lead.familia_id) return
     const { data } = await supabase
       .from('criancas')
-      .insert({ familia_id: lead.familia_id, nome: 'Nova criança' })
+      .insert({ familia_id: lead.familia_id, nome: '' })
       .select('id, nome, idade, serie_desejada, periodo')
       .single()
     if (data) setCriancasLista((prev) => [...prev, data as unknown as CriancaRow])
@@ -268,10 +272,23 @@ export function LeadDetailModal({
               <div className="space-y-2">
                 {criancasLista.map((c) => (
                   <div key={c.id} className="rounded-lg border border-slate-200 p-2.5 space-y-2">
-                    <div className="flex gap-2">
-                      <input defaultValue={c.nome || ''} onBlur={(e) => atualizarCrianca(c.id, { nome: e.target.value })} placeholder="Nome" className={`${inputCls} flex-1`} />
-                      <input defaultValue={c.idade ?? ''} onBlur={(e) => atualizarCrianca(c.id, { idade: e.target.value ? Number(e.target.value) : null })} placeholder="Idade" inputMode="numeric" className={`${inputCls} w-16`} />
-                      <button onClick={() => removerCrianca(c.id)} className="text-slate-400 hover:text-red-600" aria-label="Remover criança"><Trash2 className="w-4 h-4" /></button>
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={c.nome || ''}
+                        onChange={(e) => editarCriancaLocal(c.id, { nome: e.target.value })}
+                        onBlur={(e) => atualizarCrianca(c.id, { nome: e.target.value })}
+                        placeholder="Nome da criança"
+                        className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                      />
+                      <input
+                        value={c.idade ?? ''}
+                        onChange={(e) => editarCriancaLocal(c.id, { idade: e.target.value ? Number(e.target.value) : null })}
+                        onBlur={(e) => atualizarCrianca(c.id, { idade: e.target.value ? Number(e.target.value) : null })}
+                        placeholder="Idade"
+                        inputMode="numeric"
+                        className="w-20 flex-shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                      />
+                      <button onClick={() => removerCrianca(c.id)} className="flex-shrink-0 text-slate-400 hover:text-red-600" aria-label="Remover criança"><Trash2 className="w-4 h-4" /></button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <select value={c.serie_desejada || ''} onChange={(e) => atualizarCrianca(c.id, { serie_desejada: e.target.value || null })} className={`${selCls} w-full`}>
