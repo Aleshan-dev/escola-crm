@@ -18,6 +18,7 @@ import { MAX_ENVIOS_POR_EXECUCAO, jitterMs, sleep } from '@/lib/pacing'
 import { registrarAlerta } from '@/lib/alertas'
 import { notificarGestor } from '@/lib/notificacoes'
 import { dividirEmBaloes } from '@/lib/atendimento'
+import { ACRE_SHIFT_MS } from '@/lib/disponibilidade'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 export const maxDuration = 30
@@ -184,10 +185,11 @@ export async function GET(req: NextRequest) {
     }
 
     const trigger = triggerPorColuna(col.nome)
+    let triggerLog: string = trigger
+    let promptFollowup = promptPorTrigger(trigger, lead.familia!.nome_responsavel, count + 1)
 
     if (trigger === 'confirmacao_visita') {
-      // Baseia o lembrete na TAREFA de visita (cobre visitas criadas manualmente ou
-      // reagendadas, onde data_proxima_acao pode estar vazio).
+      // Baseia os lembretes na TAREFA de visita (cobre visitas manuais/reagendadas).
       const { data: visita } = await supabase
         .from('tarefas')
         .select('data_hora')
@@ -199,8 +201,28 @@ export async function GET(req: NextRequest) {
         .limit(1)
         .maybeSingle()
       if (!visita) continue
-      if (!ehVisitaAmanha(ms(visita.data_hora), agora)) continue
-      if (ultimoFollowupMs > agora - 20 * 60 * 60 * 1000) continue // não confirma 2x no mesmo dia
+      const visitaMs = ms(visita.data_hora)
+      const minAte = (visitaMs - agora) / 60000
+
+      if (minAte >= 15 && minAte <= 90) {
+        // Lembrete de ~1 hora antes — no máx. 1 por visita (dedup nas últimas 3h).
+        const { count: jaEnviou } = await supabase
+          .from('followup_log')
+          .select('id', { count: 'exact', head: true })
+          .eq('lead_id', lead.id)
+          .eq('trigger', 'lembrete_1h')
+          .gte('criado_em', new Date(agora - 3 * 60 * 60 * 1000).toISOString())
+        if (jaEnviou) continue
+        const wall = new Date(visitaMs + ACRE_SHIFT_MS)
+        const horaVisita = `${String(wall.getUTCHours()).padStart(2, '0')}:${String(wall.getUTCMinutes()).padStart(2, '0')}`
+        triggerLog = 'lembrete_1h'
+        promptFollowup = `Envie um lembrete curto e caloroso para ${lead.familia!.nome_responsavel}: a visita ao Colégio Pequenos Guardiões é HOJE, daqui a cerca de 1 hora, às ${horaVisita}. Confirme que a escola está esperando por ela.`
+      } else if (ehVisitaAmanha(visitaMs, agora)) {
+        // Lembrete de véspera — 1x por dia.
+        if (ultimoFollowupMs > agora - 20 * 60 * 60 * 1000) continue
+      } else {
+        continue
+      }
     } else {
       const devido = estaDevido(
         { ultimaInteracaoMs, ultimoFollowupMs, entrouColunaMs, intervaloBaseHoras: intervaloBase, count },
@@ -213,12 +235,7 @@ export async function GET(req: NextRequest) {
     let erro: string | null = null
     let texto = ''
     try {
-      const saraResult = await gerarRespostaSara(
-        lead.id,
-        undefined,
-        undefined,
-        promptPorTrigger(trigger, lead.familia!.nome_responsavel, count + 1)
-      )
+      const saraResult = await gerarRespostaSara(lead.id, undefined, undefined, promptFollowup)
       texto = saraResult.resposta
       const baloes = dividirEmBaloes(texto)
       for (let i = 0; i < baloes.length; i++) {
@@ -239,7 +256,7 @@ export async function GET(req: NextRequest) {
 
     await supabase.from('followup_log').insert({
       lead_id: lead.id,
-      trigger,
+      trigger: triggerLog,
       status: enviado ? 'enviado' : 'falhou',
       conteudo: enviado ? texto : null,
       erro,
@@ -266,7 +283,7 @@ export async function GET(req: NextRequest) {
         lead_id: lead.id,
         tipo: 'followup',
         conteudo: texto,
-        razao: `followup_${trigger}`,
+        razao: `followup_${triggerLog}`,
         sucesso: true,
       })
 

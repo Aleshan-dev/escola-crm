@@ -9,7 +9,7 @@ export type TriggerNome =
   | 'recuperacao'
   | 'reengajamento'
 
-export const HORA_MIN = 8
+export const HORA_MIN = 7
 export const HORA_MAX = 20
 
 /** Hora (0-23) no fuso de Rio Branco/Acre para um instante em ms. */
