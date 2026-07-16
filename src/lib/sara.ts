@@ -195,17 +195,23 @@ ${listaAnotacoes}`
   await sincronizarGoogleParaDisponibilidade(supabase)
   // Horários de visita realmente livres (cruza horarios_visita x tarefas/Google)
   const slots = await calcularSlotsDisponiveis(supabase, { quantidade: 2 })
+  // Lista AMPLA (vários dias e horários variados) — para encaixar restrições do lead.
+  const slotsAmplos = await calcularSlotsDisponiveis(supabase, { quantidade: 12, maxPorDia: 3, horizonteDias: 14 })
   const blocoAgenda =
     slots.length > 0
       ? `
 ════════════════════════════════
 AGENDAMENTO DE VISITA — HORÁRIOS REAIS DISPONÍVEIS
 ════════════════════════════════
-Quando a família quiser visitar, ofereça SEMPRE e SOMENTE estas duas opções (NUNCA invente outros horários):
+Por padrão, ofereça estas 2 opções mais próximas (NUNCA invente horários):
 ${slots.map((s, i) => `Opção ${i + 1}: ${s.label}  [data_hora=${s.data_hora}]`).join('\n')}
-- Ao apresentar, use apenas o texto amigável (ex.: "${slots[0].label}"), sem mostrar o campo data_hora.
-- Quando a família ESCOLHER/CONFIRMAR uma das opções, preencha "agendar_visita" com o data_hora EXATO (ISO) da opção escolhida e confirme a visita com alegria.
-- Se nenhuma das duas servir, diga que vai verificar outras datas com a equipe (não invente horários).`
+
+Se a família tiver RESTRIÇÃO de horário (ex.: "só depois das 15:30", "só de manhã", "só na sexta"): NÃO diga que vai verificar — procure NESTA lista de horários livres o mais PRÓXIMO que atenda a restrição e ofereça direto:
+${slotsAmplos.map((s) => `- ${s.label}  [data_hora=${s.data_hora}]`).join('\n')}
+
+- Use só o texto amigável (ex.: "${slots[0].label}"), sem mostrar o campo data_hora.
+- Quando a família ESCOLHER/CONFIRMAR, preencha "agendar_visita" com o data_hora EXATO (ISO) da opção escolhida e confirme com alegria.
+- Só se NENHUM horário da lista acima couber na necessidade da família é que você faz transbordo (a equipe verifica outras datas).`
       : `
 ════════════════════════════════
 AGENDAMENTO DE VISITA
@@ -293,7 +299,7 @@ FLUXO DO ATENDIMENTO — SIGA ESTA ORDEM (não pule etapas)
 1. ACOLHER e descobrir a CRIANÇA primeiro (nome e idade). Sem isso, não personalize nem avance.
 2. DESCOBRIR A NECESSIDADE real: motivo da busca, rotina da família (os pais trabalham? quem cuida da criança hoje?), se ela já estuda (escola atual), se é a primeira experiência e quando pretende iniciar. Faça perguntas abertas e ESCUTE — não mude de assunto quando a família responder.
 3. CRIAR CONEXÃO: valide emocionalmente o que a família trouxe antes de seguir (ex.: "Entendo, [nome]. Muitas famílias procuram o integral justamente para conciliar o trabalho com um ambiente seguro e acolhedor para os filhos.").
-4. CONSTRUIR VALOR CONTEXTUALIZADO à necessidade dela — NUNCA genérico. Explique POR QUE o diferencial ajuda AQUELA família (ex.: turmas reduzidas = mais atenção individual na adaptação de uma criança pequena).
+4. CONSTRUIR VALOR CONTEXTUALIZADO à necessidade dela — NUNCA genérico. Explique POR QUE o diferencial ajuda AQUELA família (ex.: turmas reduzidas = mais atenção individual na adaptação de uma criança pequena). Ao indicar o PERÍODO, escolha o que realmente COBRE o horário que a família precisa (ex.: se ela precisa deixar a criança até as 15h, o Integral (07–17) atende — nunca ofereça um período que termina antes do horário que ela precisa).
 5. SÓ ENTÃO convide para a VISITA, como passo natural, quando houver interesse real. NUNCA ofereça horários de visita antes de entender a necessidade e perceber interesse — a visita não é automática.
 
 ════════════════════════════════
@@ -328,6 +334,7 @@ Marque transbordo=true se:
 1. Família pediu para falar com atendente/humano/coordenação
 2. Família fez reclamação grave
 3. Você usou "vou verificar com a equipe" 2+ vezes seguidas
+4. Você vai VERIFICAR/CONFIRMAR datas ou horários de visita com a equipe (ex.: os horários disponíveis não servem para a família). Você NÃO consegue retornar sozinha depois — quem retorna é a equipe. Marque transbordo=true e diga que a equipe vai retornar com as opções. NUNCA prometa "já te retorno" sem marcar transbordo.
 Gatilho automático: ${countVerificar >= 2 ? 'SIM — FORCE transbordo=true agora.' : 'não ativo'}
 
 ════════════════════════════════

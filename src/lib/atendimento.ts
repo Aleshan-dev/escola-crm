@@ -134,6 +134,15 @@ export async function processarMensagemRecebida(
       .select('id, nome_responsavel')
       .single()
     familia = ins.data
+    if (!familia) {
+      // Corrida (telefone é único): outra execução simultânea já criou a família — re-busca.
+      const { data: existente } = await supabase
+        .from('familias')
+        .select('id, nome_responsavel')
+        .eq('telefone', telefone)
+        .maybeSingle()
+      familia = existente
+    }
   }
   if (!familia) throw new Error('Falha ao criar família')
 
@@ -176,6 +185,18 @@ export async function processarMensagemRecebida(
       .select('id, ia_ativa, coluna_id, sara_pode_mover, crianca_id, precisa_atendimento_humano')
       .single()
     lead = ins.data
+    if (!lead) {
+      // Corrida (índice único de lead ativo por família): outra execução já criou — re-busca.
+      const { data: existente } = await supabase
+        .from('leads')
+        .select('id, ia_ativa, coluna_id, sara_pode_mover, crianca_id, precisa_atendimento_humano')
+        .eq('familia_id', familia.id)
+        .eq('arquivado', false)
+        .order('criado_em', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      lead = existente
+    }
   }
   if (!lead) throw new Error('Falha ao criar lead')
 

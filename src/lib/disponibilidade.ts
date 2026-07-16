@@ -49,6 +49,16 @@ export type OpcoesSlot = {
   duracaoMin?: number
   horizonteDias?: number
   antecedenciaMin?: number
+  maxPorDia?: number // quando definido, limita e DISTRIBUI os horários por dia (manhã→tarde)
+}
+
+// Seleciona até n itens distribuídos ao longo do array (inclui o primeiro e o último).
+function distribuir<T>(arr: T[], n: number): T[] {
+  if (n >= arr.length || n <= 0) return arr
+  if (n === 1) return [arr[0]]
+  const idxs = new Set<number>()
+  for (let k = 0; k < n; k++) idxs.add(Math.round((k * (arr.length - 1)) / (n - 1)))
+  return Array.from(idxs).sort((a, b) => a - b).map((i) => arr[i])
 }
 
 /**
@@ -84,28 +94,30 @@ export function gerarSlots(
     const nomeDia = DIAS_PT[base.getUTCDay()]
     const janelas = horarios.filter((h) => h.dia_semana === nomeDia && h.hora_inicio && h.hora_fim)
 
+    // Coleta TODOS os horários livres do dia (em ordem cronológica).
+    const doDia: SlotDisponivel[] = []
     for (const j of janelas) {
-      if (slots.length >= quantidade) break
       const ini = parseHora(j.hora_inicio!)
       const fim = parseHora(j.hora_fim!)
       const fimMin = fim.hora * 60 + fim.min
       let cursor = ini.hora * 60 + ini.min
-      while (cursor + duracaoMin <= fimMin && slots.length < quantidade) {
+      while (cursor + duracaoMin <= fimMin) {
         const h = Math.floor(cursor / 60)
         const m = cursor % 60
-        const utc = acreWallToUtc(
-          base.getUTCFullYear(),
-          base.getUTCMonth(),
-          base.getUTCDate(),
-          h,
-          m
-        )
+        const utc = acreWallToUtc(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), h, m)
         const ms = utc.getTime()
         if (ms >= limiteInf && !conflita(ms)) {
-          slots.push({ data_hora: utc.toISOString(), label: labelAcre(utc) })
+          doDia.push({ data_hora: utc.toISOString(), label: labelAcre(utc) })
         }
         cursor += duracaoMin
       }
+    }
+
+    // Sem maxPorDia: comportamento antigo (pega em ordem). Com maxPorDia: distribui (manhã→tarde).
+    const escolhidos = opts?.maxPorDia ? distribuir(doDia, opts.maxPorDia) : doDia
+    for (const s of escolhidos) {
+      if (slots.length >= quantidade) break
+      slots.push(s)
     }
   }
 
