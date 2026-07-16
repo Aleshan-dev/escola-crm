@@ -186,8 +186,20 @@ export async function GET(req: NextRequest) {
     const trigger = triggerPorColuna(col.nome)
 
     if (trigger === 'confirmacao_visita') {
-      if (!lead.data_proxima_acao) continue
-      if (!ehVisitaAmanha(ms(lead.data_proxima_acao), agora)) continue
+      // Baseia o lembrete na TAREFA de visita (cobre visitas criadas manualmente ou
+      // reagendadas, onde data_proxima_acao pode estar vazio).
+      const { data: visita } = await supabase
+        .from('tarefas')
+        .select('data_hora')
+        .eq('lead_id', lead.id)
+        .eq('tipo', 'visita')
+        .eq('concluida', false)
+        .gte('data_hora', new Date(agora - 60 * 60 * 1000).toISOString())
+        .order('data_hora', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      if (!visita) continue
+      if (!ehVisitaAmanha(ms(visita.data_hora), agora)) continue
       if (ultimoFollowupMs > agora - 20 * 60 * 60 * 1000) continue // não confirma 2x no mesmo dia
     } else {
       const devido = estaDevido(

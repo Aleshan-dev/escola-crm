@@ -210,6 +210,10 @@ export function LeadDetailModal({
       data_hora: new Date(tData).toISOString(),
     })
     if (error) { setTErro(error.message); return }
+    // Se for visita, registra também no lead (usado por dashboard, funil e lembrete).
+    if (tTipo === 'visita') {
+      await supabase.from('leads').update({ data_proxima_acao: new Date(tData).toISOString(), proxima_acao: 'Visita agendada' }).eq('id', lead.id)
+    }
     setTTitulo(''); setTData(''); carregarTarefas()
   }
   async function toggleTarefa(t: Tarefa) {
