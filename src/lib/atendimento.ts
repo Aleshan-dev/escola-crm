@@ -3,7 +3,7 @@ import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 import { notificarGestor } from '@/lib/notificacoes'
 import { labelAcre } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
-import { identificarResponsavel } from '@/lib/sgei'
+import { identificarResponsavel, normalizarCelularBR } from '@/lib/sgei'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -54,11 +54,9 @@ export async function registrarMensagemManual(
     if (jaExiste) return 'fromMe_sara'
   }
 
-  const { data: fam } = await supabase
-    .from('familias')
-    .select('id')
-    .eq('telefone', telefone)
-    .maybeSingle()
+  const telNorm = normalizarCelularBR(telefone) || telefone
+  const { data: fams } = await supabase.from('familias').select('id').eq('telefone_norm', telNorm).limit(1)
+  const fam = fams?.[0] ?? null
   if (!fam) return 'fromMe_sem_familia'
 
   const { data: lead } = await supabase
@@ -114,11 +112,15 @@ export async function processarMensagemRecebida(
 ): Promise<string> {
   const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia } = params
 
-  let { data: familia } = await supabase
+  // Casa a família pelo telefone NORMALIZADO (contorna diferença do 9º dígito entre
+  // o cadastro manual e o número entregue pelo WhatsApp — evita duplicar a família).
+  const telNorm = normalizarCelularBR(telefone) || telefone
+  const { data: familiasEnc } = await supabase
     .from('familias')
     .select('id, nome_responsavel')
-    .eq('telefone', telefone)
-    .maybeSingle()
+    .eq('telefone_norm', telNorm)
+    .limit(1)
+  let familia = familiasEnc?.[0] ?? null
 
   if (!familia) {
     const ins = await supabase
@@ -135,13 +137,13 @@ export async function processarMensagemRecebida(
       .single()
     familia = ins.data
     if (!familia) {
-      // Corrida (telefone é único): outra execução simultânea já criou a família — re-busca.
-      const { data: existente } = await supabase
+      // Corrida: outra execução simultânea já criou a família — re-busca (por telefone normalizado).
+      const { data: existentes } = await supabase
         .from('familias')
         .select('id, nome_responsavel')
-        .eq('telefone', telefone)
-        .maybeSingle()
-      familia = existente
+        .eq('telefone_norm', telNorm)
+        .limit(1)
+      familia = existentes?.[0] ?? null
     }
   }
   if (!familia) throw new Error('Falha ao criar família')
