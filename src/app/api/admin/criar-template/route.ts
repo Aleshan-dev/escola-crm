@@ -52,6 +52,19 @@ export async function POST(req: NextRequest) {
         },
       ],
     },
+    {
+      name: 'retorno_visita',
+      language: 'pt_BR',
+      category: 'UTILITY',
+      components: [
+        {
+          type: 'BODY',
+          text:
+            'Olá, {{1}}! Aqui é a Sara, do Colégio Pequenos Guardiões. Foi uma alegria receber vocês na visita. 💙 Como foi a experiência? Ficou alguma dúvida em que eu possa ajudar?',
+          example: { body_text: [['Maria']] },
+        },
+      ],
+    },
   ]
 
   try {

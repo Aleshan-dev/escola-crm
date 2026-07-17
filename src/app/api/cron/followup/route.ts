@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarTextoWhatsApp, enviarTemplateWhatsApp } from '@/lib/whatsapp-cloud'
 import { gerarRespostaSara } from '@/lib/sara'
 import {
   dentroHorarioComercial,
@@ -54,6 +54,22 @@ type Resultado = {
 }
 
 const ms = (iso: string | null): number => (iso ? new Date(iso).getTime() : 0)
+
+// 1º follow-up pós-visita: ~1h após o lead entrar no quadro "Visita Realizada".
+const POS_VISITA_APOS_MOVER_MS = 60 * 60 * 1000
+
+// Fora da janela de 24h o envio livre falha; recai num template aprovado.
+// Retorna null p/ gatilhos perto da visita (quase sempre dentro da janela) —
+// aí um texto de template genérico soaria errado, melhor não enviar.
+function templateFallbackDoTrigger(
+  triggerLog: string,
+  nome: string
+): { name: string; variaveis: string[] } | null {
+  if (triggerLog === 'followup_pos_visita') return { name: 'retorno_visita', variaveis: [nome] }
+  if (['primeiro_contato', 'recuperacao', 'reengajamento'].includes(triggerLog))
+    return { name: 'retomada_lead', variaveis: [nome] }
+  return null
+}
 
 type LeadSilencio = {
   id: string
@@ -223,6 +239,12 @@ export async function GET(req: NextRequest) {
       } else {
         continue
       }
+    } else if (trigger === 'followup_pos_visita' && count === 0) {
+      // 1º pós-visita: ~1h depois de entrar em "Visita Realizada", independentemente
+      // da última interação (o gestor quer o retorno logo após a visita). Janela de
+      // 1h a 3 dias — evita ressuscitar leads parados há muito tempo no quadro.
+      const desde = agora - entrouColunaMs
+      if (entrouColunaMs === 0 || desde < POS_VISITA_APOS_MOVER_MS || desde > 3 * 24 * 60 * 60 * 1000) continue
     } else {
       const devido = estaDevido(
         { ultimaInteracaoMs, ultimoFollowupMs, entrouColunaMs, intervaloBaseHoras: intervaloBase, count },
@@ -234,6 +256,7 @@ export async function GET(req: NextRequest) {
     let enviado = false
     let erro: string | null = null
     let texto = ''
+    let viaTemplate = false
     try {
       const saraResult = await gerarRespostaSara(lead.id, undefined, undefined, promptFollowup)
       texto = saraResult.resposta
@@ -252,13 +275,35 @@ export async function GET(req: NextRequest) {
     } catch (e) {
       erro = e instanceof Error ? e.message : 'erro desconhecido'
       console.error(`Follow-up falhou para lead ${lead.id}:`, erro)
+
+      // Fora da janela de 24h o envio livre falha -> tenta o template aprovado.
+      const tf = templateFallbackDoTrigger(triggerLog, lead.familia!.nome_responsavel)
+      if (tf) {
+        try {
+          const wid = await enviarTemplateWhatsApp(
+            tel, tf.name, 'pt_BR', tf.variaveis, lead.familia?.whatsapp_phone_number_id
+          )
+          await supabase.from('mensagens').insert({
+            lead_id: lead.id,
+            direcao: 'out_ia',
+            conteudo: `[template: ${tf.name}]`,
+            whatsapp_message_id: wid,
+          })
+          enviado = true
+          viaTemplate = true
+          erro = null
+          triggerLog = `${triggerLog}_template`
+        } catch (e2) {
+          erro = `${erro} | template ${tf.name}: ${e2 instanceof Error ? e2.message : 'erro'}`
+        }
+      }
     }
 
     await supabase.from('followup_log').insert({
       lead_id: lead.id,
       trigger: triggerLog,
       status: enviado ? 'enviado' : 'falhou',
-      conteudo: enviado ? texto : null,
+      conteudo: enviado ? (viaTemplate ? `[template] ${texto}` : texto) : null,
       erro,
       followup_num: count + 1,
     })
