@@ -1,5 +1,8 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarTextoWhatsApp, enviarTemplateWhatsApp } from '@/lib/whatsapp-cloud'
+
+// Fallback por template quando o envio livre falha (fora da janela de 24h).
+export type TemplateFallback = { name: string; language?: string; variaveis: string[] }
 
 // Notificações proativas para o WhatsApp do gestor (telefone_transbordo em config_ia).
 // Cada tipo tem uma flag liga/desliga; transbordo é sempre enviado (crítico).
@@ -16,7 +19,8 @@ const FLAG_POR_TIPO: Record<TipoNotif, 'notif_visita_agendada' | 'notif_encerram
 export async function notificarGestor(
   supabase: ReturnType<typeof createServerAdminClient>,
   tipo: TipoNotif,
-  mensagem: string
+  mensagem: string,
+  opts?: { templateFallback?: TemplateFallback }
 ): Promise<void> {
   try {
     const { data: cfg } = await supabase
@@ -31,7 +35,23 @@ export async function notificarGestor(
     const flag = FLAG_POR_TIPO[tipo]
     if (flag && cfg && (cfg as Record<string, unknown>)[flag] === false) return
 
-    await enviarTextoWhatsApp(tel, mensagem)
+    try {
+      // Tenta o envio livre (grátis dentro da janela de 24h).
+      await enviarTextoWhatsApp(tel, mensagem)
+    } catch (errLivre) {
+      // Fora da janela de 24h o envio livre falha (ex.: 131047). Recai no template
+      // aprovado, que entrega a qualquer hora. Se não houver template, propaga.
+      if (opts?.templateFallback) {
+        await enviarTemplateWhatsApp(
+          tel,
+          opts.templateFallback.name,
+          opts.templateFallback.language || 'pt_BR',
+          opts.templateFallback.variaveis
+        )
+      } else {
+        throw errLivre
+      }
+    }
   } catch (e) {
     console.error('Falha ao notificar o gestor:', e)
   }

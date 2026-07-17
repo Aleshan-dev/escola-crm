@@ -42,8 +42,17 @@ export function BotaoCriarTemplate() {
     try {
       const r = await fetch('/api/admin/criar-template', { method: 'POST' })
       const j = await r.json()
-      if (!r.ok) { setMsg(`Falha: ${j?.error || 'erro'}`); return }
-      setMsg('Template enviado para aprovação da Meta ✓')
+      if (Array.isArray(j?.resultados)) {
+        const resumo = j.resultados
+          .map((x: { name: string; ok: boolean; status?: string; erro?: string }) =>
+            `${x.name}: ${x.ok ? (x.status || 'ok') : (x.erro || 'falha')}`)
+          .join(' · ')
+        setMsg(resumo)
+      } else if (!r.ok) {
+        setMsg(`Falha: ${j?.error || 'erro'}`)
+      } else {
+        setMsg('Templates enviados para aprovação da Meta ✓')
+      }
       await carregarStatus()
     } catch {
       setMsg('Falha de conexão.')

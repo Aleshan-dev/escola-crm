@@ -286,7 +286,17 @@ export async function processarMensagemRecebida(
               (ident.aluno_nome ? `Aluno: ${ident.aluno_nome}\n` : '') +
               (ident.turma_nome ? `Turma: ${ident.turma_nome}\n` : '') +
               `Telefone: ${telefone}\n\n` +
-              `A Sara foi pausada e o contato está no funil *Matriculados*. Atenda pelo CRM.`
+              `A Sara foi pausada e o contato está no funil *Matriculados*. Atenda pelo CRM.`,
+            {
+              templateFallback: {
+                name: 'alerta_transbordo',
+                variaveis: [
+                  familia.nome_responsavel || ident.nome || 'Família',
+                  telefone,
+                  'Responsável já matriculado (SGEI)',
+                ],
+              },
+            }
           )
         }
       }
@@ -609,21 +619,22 @@ export async function processarMensagemRecebida(
           sucesso: true,
         })
 
-        const { data: cfgTransbordo } = await supabase
-          .from('config_ia')
-          .select('telefone_transbordo')
-          .eq('id', 1)
-          .single()
-        const telTransbordo = cfgTransbordo?.telefone_transbordo
-        if (telTransbordo) {
-          const msg =
-            `⚠️ *ATENDIMENTO HUMANO NECESSÁRIO*\n\n` +
+        const motivoTb = saraResult.motivo_transbordo || 'Solicitado pelo lead'
+        await notificarGestor(
+          supabase,
+          'transbordo',
+          `⚠️ *ATENDIMENTO HUMANO NECESSÁRIO*\n\n` +
             `Família: ${familia.nome_responsavel || 'Desconhecida'}\n` +
             `Telefone: ${telefone}\n` +
-            `Motivo: ${saraResult.motivo_transbordo || 'Solicitado pelo lead'}\n\n` +
-            `A Sara foi pausada. Acesse o CRM para continuar o atendimento.`
-          await enviarTexto(telTransbordo, msg).catch(() => null)
-        }
+            `Motivo: ${motivoTb}\n\n` +
+            `A Sara foi pausada. Acesse o CRM para continuar o atendimento.`,
+          {
+            templateFallback: {
+              name: 'alerta_transbordo',
+              variaveis: [familia.nome_responsavel || 'Família', telefone, motivoTb],
+            },
+          }
+        )
       }
     } catch (e) {
       console.error('Sara IA falhou:', e)

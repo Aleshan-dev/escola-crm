@@ -54,19 +54,14 @@ export async function baixarMidiaCloud(
   }
 }
 
-// Envio unificado: usa a conta Cloud ativa (banco) ou o env como fallback.
-// Retorna o id da mensagem (wid) ou null. Ponto único de saída do WhatsApp.
-export async function enviarTextoWhatsApp(
-  to: string,
-  texto: string,
-  phoneId?: string | null,
-): Promise<string | null> {
+type Conta = { phone_number_id: string; token: string }
+
+// Resolve a conta Cloud a usar: a do número pelo qual o lead chegou (multi-número)
+// ou a conta ativa mais recente.
+async function resolverConta(phoneId?: string | null): Promise<Conta | null> {
   const { createServerAdminClient } = await import('@/lib/supabase-server')
   const supabase = createServerAdminClient()
-  type Conta = { phone_number_id: string; token: string }
-  let conta: Conta | null = null
 
-  // Prioriza a conta do número pelo qual o lead chegou (multi-número).
   if (phoneId) {
     const { data } = await supabase
       .from('whatsapp_contas')
@@ -74,19 +69,26 @@ export async function enviarTextoWhatsApp(
       .eq('phone_number_id', phoneId)
       .eq('ativo', true)
       .maybeSingle<Conta>()
-    conta = data
+    if (data) return data
   }
-  // Fallback: conta ativa mais recente (ou env dentro de enviarTextoCloud).
-  if (!conta) {
-    const { data } = await supabase
-      .from('whatsapp_contas')
-      .select('phone_number_id, token')
-      .eq('ativo', true)
-      .order('criado_em', { ascending: false })
-      .limit(1)
-      .maybeSingle<Conta>()
-    conta = data
-  }
+  const { data } = await supabase
+    .from('whatsapp_contas')
+    .select('phone_number_id, token')
+    .eq('ativo', true)
+    .order('criado_em', { ascending: false })
+    .limit(1)
+    .maybeSingle<Conta>()
+  return data
+}
+
+// Envio unificado: usa a conta Cloud ativa (banco) ou o env como fallback.
+// Retorna o id da mensagem (wid) ou null. Ponto único de saída do WhatsApp.
+export async function enviarTextoWhatsApp(
+  to: string,
+  texto: string,
+  phoneId?: string | null,
+): Promise<string | null> {
+  const conta = await resolverConta(phoneId)
 
   if (conta?.token) {
     const sent = await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
@@ -97,4 +99,38 @@ export async function enviarTextoWhatsApp(
   const { evolutionSendText } = await import('@/lib/evolution')
   const sent = await evolutionSendText(to, texto)
   return sent?.key?.id || null
+}
+
+// Envia um template APROVADO (funciona a qualquer hora, sem depender da janela de 24h).
+// `variaveis` preenche os {{1}}, {{2}}... do corpo, na ordem. Só via Cloud API.
+export async function enviarTemplateWhatsApp(
+  to: string,
+  templateName: string,
+  language: string,
+  variaveis: string[],
+  phoneId?: string | null,
+): Promise<string | null> {
+  const conta = await resolverConta(phoneId)
+  if (!conta?.token) throw new Error('Sem conta Cloud ativa para enviar template')
+
+  const components = variaveis.length
+    ? [{ type: 'body', parameters: variaveis.map((v) => ({ type: 'text', text: v || '—' })) }]
+    : []
+
+  const r = await fetch(`https://graph.facebook.com/v21.0/${conta.phone_number_id}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${conta.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: { name: templateName, language: { code: language }, components },
+    }),
+  })
+  if (!r.ok) {
+    const t = await r.text()
+    throw new Error(`Cloud template falhou (${r.status}): ${t}`)
+  }
+  const j = await r.json()
+  return j?.messages?.[0]?.id || null
 }
