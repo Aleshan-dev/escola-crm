@@ -10,6 +10,13 @@ import {
   ehVisitaAmanha,
   deveMarcarPerdidoPorSilencio,
   DIAS_SILENCIO_PERDIDO,
+  promptPorTrigger,
+  anguloPorTentativa,
+  estaDevidoPosVisita,
+  promptPosVisitaPorToque,
+  POS_VISITA_TOQUES_HORAS,
+  POS_VISITA_MAX_TOQUES,
+  type TriggerNome,
 } from './followup-regras'
 
 const H = 60 * 60 * 1000
@@ -33,10 +40,12 @@ describe('triggerPorColuna', () => {
     expect(triggerPorColuna('Visita Agendada')).toBe('confirmacao_visita')
     expect(triggerPorColuna('Visita Realizada')).toBe('followup_pos_visita')
     expect(triggerPorColuna('Repescagem')).toBe('recuperacao')
+    // DRIFT FIX 2026-08-13 — "No Show" é a coluna dedicada do lead que faltou;
+    // precisa disparar o resgate, NÃO o reengajamento genérico.
+    expect(triggerPorColuna('No Show')).toBe('resgate_no_show')
   })
-  it('usa reengajamento como padrão (ex.: Em Atendimento, No Show)', () => {
+  it('usa reengajamento como padrão (ex.: Em Atendimento)', () => {
     expect(triggerPorColuna('Em Atendimento')).toBe('reengajamento')
-    expect(triggerPorColuna('No Show')).toBe('reengajamento')
   })
 })
 
@@ -118,5 +127,128 @@ describe('ehVisitaAmanha', () => {
     const depois = acreWallToUtc(2026, 6, 4, 10, 0).getTime()
     expect(ehVisitaAmanha(hoje, agora)).toBe(false)
     expect(ehVisitaAmanha(depois, agora)).toBe(false)
+  })
+})
+
+// AUDITORIA CMO 2026-07-29 — o prompt de follow-up era fonte rastreada de
+// cópia literal (travessão e frase pronta). Estes testes travam a regressão.
+describe('promptPorTrigger', () => {
+  const TRIGGERS: TriggerNome[] = [
+    'primeiro_contato',
+    'confirmacao_visita',
+    'followup_pos_visita',
+    'recuperacao',
+    'reengajamento',
+    'lembrete_dia',
+    'resgate_no_show',
+  ]
+
+  it('nunca contém travessão em nenhum gatilho ou tentativa', () => {
+    for (const t of TRIGGERS) {
+      for (let n = 1; n <= 5; n++) {
+        expect(promptPorTrigger(t, 'Larissa', n), `${t} tentativa ${n}`).not.toMatch(/[—–]/)
+      }
+    }
+  })
+
+  it('nunca entrega frase pronta entre aspas para a Sara copiar', () => {
+    for (const t of TRIGGERS) {
+      const texto = promptPorTrigger(t, 'Larissa', 1)
+      expect(texto, t).not.toMatch(/"[^"]{15,}"/)
+    }
+  })
+
+  it('sempre reforça a forma e usa o nome da família', () => {
+    for (const t of TRIGGERS) {
+      const texto = promptPorTrigger(t, 'Larissa', 1)
+      expect(texto, t).toContain('Larissa')
+      expect(texto, t).toContain('Nunca use travessão')
+      expect(texto, t).toContain('Datas sempre absolutas')
+    }
+  })
+
+  it('primeiro contato foca em nome e idade e NÃO oferece visita', () => {
+    const texto = promptPorTrigger('primeiro_contato', 'Larissa', 1)
+    expect(texto).toContain('nome e a idade da criança')
+    expect(texto).toContain('NÃO ofereça visita')
+  })
+
+  it('reengajamento condiciona a oferta de horário a já ter nome e idade', () => {
+    const texto = promptPorTrigger('reengajamento', 'Larissa', 1)
+    expect(texto).toContain('Só ofereça horários se você já souber o nome e a idade')
+    expect(texto).toContain('NUNCA invente escassez')
+  })
+
+  it('pós-visita manda ancorar o preço em vez de fugir do número', () => {
+    const texto = promptPorTrigger('followup_pos_visita', 'Larissa', 1)
+    expect(texto).toContain('NUNCA fuja do número')
+  })
+
+  it('a primeira tentativa não leva texto de reforço', () => {
+    const texto = promptPorTrigger('reengajamento', 'Larissa', 1)
+    expect(texto).not.toContain('reforço')
+  })
+
+  it('cada tentativa seguinte muda de ângulo, não só de intensidade', () => {
+    const angulos = [2, 3, 4].map((n) => promptPorTrigger('reengajamento', 'Larissa', n))
+    expect(angulos[0]).toContain('primeiro reforço')
+    expect(angulos[1]).toContain('segundo reforço')
+    expect(angulos[2]).toContain('terceiro reforço')
+    expect(new Set(angulos).size).toBe(3)
+  })
+
+  it('o toque 3 oferece saída digna e o último fecha o ciclo sem pressão', () => {
+    expect(anguloPorTentativa(3)).toContain('saída digna')
+    expect(anguloPorTentativa(4)).toContain('Nunca pressione')
+    expect(anguloPorTentativa(9)).toContain('último reforço')
+  })
+})
+
+// Régua de pós-visita — o ebook "Captação Previsível" pede 5 toques em 14 dias.
+describe('pós-visita — cronograma D0/D3/D7/D10/D14', () => {
+  const agora = Date.now()
+  it('tem 5 toques nos offsets certos (em horas)', () => {
+    expect([...POS_VISITA_TOQUES_HORAS]).toEqual([0, 72, 168, 240, 336])
+    expect(POS_VISITA_MAX_TOQUES).toBe(5)
+  })
+  it('o 1º toque (D0) vence assim que o lead entra na coluna', () => {
+    expect(estaDevidoPosVisita(agora, 0, agora)).toBe(true)
+  })
+  it('o 2º toque (D3) só vence após 72h da entrada', () => {
+    expect(estaDevidoPosVisita(agora - 71 * H, 1, agora)).toBe(false)
+    expect(estaDevidoPosVisita(agora - 73 * H, 1, agora)).toBe(true)
+  })
+  it('o último toque (D14) só vence após 336h', () => {
+    expect(estaDevidoPosVisita(agora - 335 * H, 4, agora)).toBe(false)
+    expect(estaDevidoPosVisita(agora - 337 * H, 4, agora)).toBe(true)
+  })
+  it('não existe 6º toque (índice fora do cronograma)', () => {
+    expect(estaDevidoPosVisita(agora - 1000 * H, 5, agora)).toBe(false)
+  })
+  it('sem data de entrada na coluna, nada vence', () => {
+    expect(estaDevidoPosVisita(0, 0, agora)).toBe(false)
+  })
+})
+
+describe('promptPosVisitaPorToque', () => {
+  it('cada marco tem intenção distinta e todos travam a forma, sem travessão', () => {
+    const marcos = [0, 1, 2, 3, 4].map((t) => promptPosVisitaPorToque('Larissa', t))
+    expect(new Set(marcos).size).toBe(5)
+    for (const m of marcos) {
+      expect(m).toContain('Larissa')
+      expect(m).toContain('Nunca use travessão')
+      expect(m).not.toMatch(/[—–]/)
+    }
+  })
+  it('D0 reaproveita a abordagem quente de pós-visita', () => {
+    expect(promptPosVisitaPorToque('Larissa', 0)).toContain('NUNCA fuja do número')
+  })
+  it('D7 cita o depoimento quando fornecido, senão usa mensagem de valor', () => {
+    const comDep = promptPosVisitaPorToque('Larissa', 2, 'meu filho floresceu na escola')
+    expect(comDep).toContain('meu filho floresceu na escola')
+    expect(promptPosVisitaPorToque('Larissa', 2)).toContain('no máximo 10 crianças')
+  })
+  it('índice acima do previsto cai no fechamento gentil (D14)', () => {
+    expect(promptPosVisitaPorToque('Larissa', 9)).toContain('está tudo bem')
   })
 })
