@@ -1,0 +1,5 @@
+# Arquivos que nao precisam ir para a Vercel no deploy (pasta -> Vercel).
+backup.ps1
+docs/
+conselheiros/
+*.bak

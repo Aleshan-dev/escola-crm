@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarTextoComFallback } from '@/lib/janela'
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
@@ -20,18 +20,40 @@ export async function POST(req: NextRequest) {
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
 
   try {
-    const wid = await enviarTextoWhatsApp(lead.familia.telefone, texto, lead.familia.whatsapp_phone_number_id)
+    const r = await enviarTextoComFallback(lead.familia.telefone, texto, {
+      leadId: lead_id,
+      phoneId: lead.familia.whatsapp_phone_number_id,
+    })
 
-    // Salva mensagem. NÃO gravamos enviado_por com o id de auth: a FK aponta para
-    // a tabela `usuarios` (hoje vazia), então preencher com o id de login violaria
-    // a constraint e a mensagem não seria gravada. A coluna aceita nulo.
+    // Fora da janela de 24h: NÃO foi enviado. Já criamos um alerta (tela Alertas)
+    // para envio manual pelo celular. Não gravamos como out_humano — quando a
+    // secretária enviar do celular, o echo (smb_message_echoes) registra no chat.
+    if (!r.enviado && r.janelaFechada) {
+      return NextResponse.json({
+        ok: false,
+        janela_fechada: true,
+        aviso: r.alertaCriado
+          ? 'Fora da janela de 24h. Criei um alerta em "Alertas" para envio manual pelo celular.'
+          : 'Fora da janela de 24h. Lead inativo (perdido/arquivado) — nenhum alerta criado.',
+      })
+    }
+
+    // Enviado dentro da janela: grava no histórico.
+    // NÃO gravamos enviado_por com o id de auth: a FK aponta para `usuarios`
+    // (hoje vazia), então preencher violaria a constraint. A coluna aceita nulo.
     const { error: errMsg } = await supabase.from('mensagens').insert({
       lead_id,
       direcao: 'out_humano',
       conteudo: texto,
-      whatsapp_message_id: wid,
+      whatsapp_message_id: r.wid,
     })
     if (errMsg) {
+      // 23505 = unique_violation em whatsapp_message_id: o ECHO desta mesma
+      // mensagem (message.any/smb_echo do WhatsApp) chegou primeiro e já gravou.
+      // A mensagem foi enviada E está no histórico — sucesso, não erro.
+      if (errMsg.code === '23505') {
+        return NextResponse.json({ ok: true, jaGravadaPeloEcho: true })
+      }
       return NextResponse.json({ error: `Mensagem enviada, mas falhou ao gravar no histórico: ${errMsg.message}` }, { status: 500 })
     }
 

@@ -203,3 +203,79 @@ export async function extrairConteudoMidia(data: EvolutionData): Promise<string 
     doc?.fileName || doc?.title || undefined
   )
 }
+
+// ============================================================================
+// WAHA — extração de mídia recebida.
+// ============================================================================
+
+// Mapeia mimetype para o tipo que interpretarMidia entende e para o tipo_midia do banco.
+function classificarTipoMidia(mimetype: string): {
+  tipoInterpretar: 'audio' | 'imagem' | 'documento'
+  tipoDb: 'imagem' | 'audio' | 'documento' | 'video'
+} {
+  const m = (mimetype || '').toLowerCase()
+  if (m.startsWith('audio/')) return { tipoInterpretar: 'audio', tipoDb: 'audio' }
+  if (m.startsWith('image/')) return { tipoInterpretar: 'imagem', tipoDb: 'imagem' }
+  if (m.startsWith('video/')) return { tipoInterpretar: 'documento', tipoDb: 'video' }
+  return { tipoInterpretar: 'documento', tipoDb: 'documento' }
+}
+
+/**
+ * (WAHA) Extrai a mídia do payload do evento: baixa de `payload.media.url` (com a
+ * chave do WAHA), salva no bucket 'midias' e devolve o texto interpretado para a
+ * Sara + o tipo/caminho para gravar no chat. Retorna null se não houver mídia.
+ */
+export async function extrairConteudoMidiaWaha(
+  payload: any
+): Promise<{ conteudo: string; tipoMidia: string; urlMidia: string | null } | null> {
+  const media = payload?.media
+  const mediaUrl: string | undefined = media?.url || payload?.mediaUrl
+  if (!payload?.hasMedia && !mediaUrl) return null
+
+  const caption: string | undefined = (payload?.body || '').trim() || undefined
+  const filename: string | undefined = media?.filename || undefined
+  let mimetype: string = (media?.mimetype || '').split(';')[0].trim()
+
+  // hasMedia mas o WAHA não disponibilizou o arquivo (download desligado no server).
+  if (!mediaUrl) {
+    return {
+      conteudo:
+        '[O responsável enviou uma mídia, mas o WhatsApp não a disponibilizou por aqui. Agradeça e, se parecer importante, peça para reenviar como texto. NÃO presuma o assunto — em especial, NÃO trate como comprovante.]',
+      tipoMidia: 'documento',
+      urlMidia: null,
+    }
+  }
+
+  // Baixa o binário do file-server do WAHA (usa a chave por segurança).
+  let base64: string | null = null
+  try {
+    const { getWahaConfig } = await import('@/lib/waha')
+    const { key } = await getWahaConfig()
+    const r = await fetch(mediaUrl, { headers: key ? { 'X-Api-Key': key } : {} })
+    if (r.ok) {
+      const buf = Buffer.from(await r.arrayBuffer())
+      base64 = buf.toString('base64')
+      if (!mimetype) mimetype = (r.headers.get('content-type') || '').split(';')[0].trim()
+    } else {
+      console.error('[midia-waha] download falhou:', r.status)
+    }
+  } catch (e) {
+    console.error('[midia-waha] erro no download:', e)
+  }
+
+  if (!base64) {
+    return {
+      conteudo:
+        '[O responsável enviou uma mídia, mas não consegui baixá-la. Peça, com gentileza, que reenvie ou descreva por texto.]',
+      tipoMidia: 'documento',
+      urlMidia: null,
+    }
+  }
+
+  const { tipoInterpretar, tipoDb } = classificarTipoMidia(mimetype)
+  const { createServerAdminClient } = await import('@/lib/supabase-server')
+  const supabase = createServerAdminClient()
+  const urlMidia = await salvarMidiaStorage(supabase, { base64, mimetype, filename })
+  const conteudo = await interpretarMidia(tipoInterpretar, base64, mimetype, caption, filename)
+  return { conteudo, tipoMidia: tipoDb, urlMidia }
+}

@@ -1,0 +1,32 @@
+name: Follow-up automatico da Sara
+
+# DESATIVADO (agendamento) em 29/07/2026.
+#
+# Histórico: este workflow duplicava o followup-cron.yml. Quando o agendamento
+# migrou para a Vercel, o followup-cron.yml foi desativado mas ESTE aqui ficou
+# com o schedule ativo — e mesmo assim o cron parou de rodar em 23/07/2026
+# (zero requisições a /api/cron/followup nos logs da Vercel). Resultado: o motor
+# de follow-up ficou 6 dias morto com 11 leads vencidos sem nenhum toque.
+#
+# Agora o agendamento é 100% Vercel (ver vercel.json, */15). Deixar os dois
+# ativos causaria disparo duplicado. Mantido apenas o workflow_dispatch como
+# rede de segurança manual. Requer o secret CRON_SECRET.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  followup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar follow-up
+        run: |
+          RESPONSE=$(curl -s -o /tmp/r.txt -w "%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://escola-crm.vercel.app/api/cron/followup)
+          echo "HTTP Status: $RESPONSE"
+          cat /tmp/r.txt
+          if [ "$RESPONSE" != "200" ]; then
+            exit 1
+          fi

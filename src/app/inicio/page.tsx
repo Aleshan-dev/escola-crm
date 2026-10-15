@@ -27,6 +27,7 @@ export default function InicioPage() {
   const [loading, setLoading] = useState(true)
   const [nomeUser, setNomeUser] = useState('')
   const [funilSel, setFunilSel] = useState('')
+  const [funis, setFunis] = useState<any[]>([])
   const [colunas, setColunas] = useState<any[]>([])
   const [leads, setLeads] = useState<any[]>([])
   const [tarefas, setTarefas] = useState<any[]>([])
@@ -51,6 +52,7 @@ export default function InicioPage() {
         supabase.from('usuarios').select('id, nome'),
       ])
       const fs = (fr.data as any[]) || []
+      setFunis(fs)
       // Dashboard unificado: sempre o funil padrão (captação), sem seletor.
       setFunilSel(fs.find((f) => f.is_padrao)?.id || fs[0]?.id || '')
       setColunas((cr.data as any[]) || [])
@@ -75,15 +77,27 @@ export default function InicioPage() {
     const ls = leads.filter((l) => colIds.has(l.coluna_id))
     const leadIds = new Set(ls.map((l) => l.id))
     const ts = tarefas.filter((t) => t.lead_id && leadIds.has(t.lead_id))
-    const colMatric = cols.find((c) => /matric/i.test(c.nome))
+    const colMatricCaptacao = cols.find((c) => /matric/i.test(c.nome))
     const iniMes = (() => { const x = new Date(); x.setDate(1); x.setHours(0, 0, 0, 0); return x.getTime() })()
     const somaMeta = (re: RegExp) => metas.filter((x) => re.test(x.nome || '')).reduce((s, x) => s + (x.valor_meta || 0), 0)
 
+    // Quando um lead é matriculado, ele é transferido para o funil dedicado "Matriculados"
+    // (colunas por série/turma), saindo do funil de captação. Portanto contamos as matrículas
+    // em TODAS as colunas desse funil, além da coluna "Matriculados" da própria captação.
+    const funilMatric = funis.find((f) => !f.is_padrao && /matric/i.test(f.nome || ''))
+    const colMatricIds = new Set<string>()
+    if (funilMatric) colunas.filter((c) => c.funil_id === funilMatric.id).forEach((c) => colMatricIds.add(c.id))
+    if (colMatricCaptacao) colMatricIds.add(colMatricCaptacao.id)
+    const nomeColuna = (id: string) => colunas.find((c) => c.id === id)?.nome || ''
+
     const contatosMes = ls.filter((l) => new Date(l.criado_em).getTime() >= iniMes).length
-    const matricLeads = colMatric ? ls.filter((l) => l.coluna_id === colMatric.id) : []
+    const matricLeads = leads.filter((l) => colMatricIds.has(l.coluna_id))
     const matriculasMes = matricLeads.filter((l) => new Date(l.entrou_coluna_em || l.criado_em).getTime() >= iniMes).length
 
-    const chave = (l: any) => dim === 'serie' ? (l.crianca?.serie_desejada || 'Sem série') : dim === 'origem' ? (l.origem || 'Sem origem') : nomeUsuario(l.responsavel_id)
+    // Para matriculados do funil por série, a "série" é a própria coluna (turma); na captação, usa a série desejada.
+    const chave = (l: any) => dim === 'serie'
+      ? (colMatricCaptacao && l.coluna_id === colMatricCaptacao.id ? (l.crianca?.serie_desejada || 'Sem série') : (nomeColuna(l.coluna_id) || 'Sem série'))
+      : dim === 'origem' ? (l.origem || 'Sem origem') : nomeUsuario(l.responsavel_id)
     const g: Record<string, number> = {}
     for (const l of matricLeads) { const k = chave(l); g[k] = (g[k] || 0) + 1 }
     const tabela: Row[] = Object.entries(g).map(([nome, qtd]) => ({ nome, qtd })).sort((a, b) => b.qtd - a.qtd)
@@ -94,17 +108,21 @@ export default function InicioPage() {
     const op = (id: string | null) => { const k = id || 'sem'; if (!opMap[k]) opMap[k] = { nome: nomeUsuario(id), matriculas: 0, tarefas: 0, contatos: 0 }; return opMap[k] }
     for (const l of ls) {
       if (new Date(l.criado_em).getTime() >= ini) op(l.responsavel_id).contatos++
-      if (colMatric && l.coluna_id === colMatric.id && new Date(l.entrou_coluna_em || l.criado_em).getTime() >= ini) op(l.responsavel_id).matriculas++
+    }
+    for (const l of matricLeads) {
+      if (new Date(l.entrou_coluna_em || l.criado_em).getTime() >= ini) op(l.responsavel_id).matriculas++
     }
     for (const t of ts) { if (new Date(t.criado_em).getTime() >= ini) op(t.responsavel_id).tarefas++ }
     const operadores = Object.values(opMap)
     if (operadores.length === 0) operadores.push({ nome: nomeUser ? cap(nomeUser) : 'Operador', matriculas: 0, tarefas: 0, contatos: 0 })
 
     const funilOrdenado = [...cols].sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
-    const funil = funilOrdenado.map((c) => ({ nome: c.nome, qtd: ls.filter((l) => l.coluna_id === c.id).length }))
-    const totalLeads = ls.length
+    // A coluna "Matriculados" da captação fica vazia (os leads vão para o funil dedicado);
+    // por isso mostramos ali a contagem real de matriculados.
+    const funil = funilOrdenado.map((c) => ({ nome: c.nome, qtd: /matric/i.test(c.nome) ? matricLeads.length : ls.filter((l) => l.coluna_id === c.id).length }))
+    const totalLeads = ls.length + matricLeads.length
     const qtdPor = (re: RegExp) => funil.find((c) => re.test(c.nome))?.qtd || 0
-    const matriculados = qtdPor(/matric/i)
+    const matriculados = matricLeads.length
     const perdidos = qtdPor(/perdid/i)
     const visitaAgendada = qtdPor(/agendada/i)
     const visitaRealizada = qtdPor(/realizada/i)
@@ -119,7 +137,11 @@ export default function InicioPage() {
       const c = canalDe(l)
       if (!canalMap[c]) canalMap[c] = { canal: c, leads: 0, matriculas: 0, investimento: 0 }
       if (new Date(l.criado_em).getTime() >= iniMes) canalMap[c].leads++
-      if (colMatric && l.coluna_id === colMatric.id && new Date(l.entrou_coluna_em || l.criado_em).getTime() >= iniMes) canalMap[c].matriculas++
+    }
+    for (const l of matricLeads) {
+      const c = canalDe(l)
+      if (!canalMap[c]) canalMap[c] = { canal: c, leads: 0, matriculas: 0, investimento: 0 }
+      if (new Date(l.entrou_coluna_em || l.criado_em).getTime() >= iniMes) canalMap[c].matriculas++
     }
     for (const inv of invs) {
       if (inv.periodo === periodoAtual) {
@@ -137,7 +159,7 @@ export default function InicioPage() {
       funil, totalLeads, matriculados, perdidos, visitaAgendada, visitaRealizada, taxaMatricula, maxFunil,
       aquisicao,
     }
-  }, [colunas, leads, tarefas, metas, usuarios, funilSel, dim, periodo, nomeUser, invs])
+  }, [colunas, leads, tarefas, metas, usuarios, funis, funilSel, dim, periodo, nomeUser, invs])
 
   function previsao(r: number) {
     const h = new Date(); const dia = h.getDate()

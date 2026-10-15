@@ -7,6 +7,7 @@ import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
   MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight, DollarSign, Bell,
+  Wallet, ClipboardCheck,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -18,7 +19,15 @@ const secoes: { nome: string; itens: Item[] }[] = [
     itens: [
       { titulo: 'Comportamento da Sara', descricao: 'Prompt, modelo e tom de voz da assistente.', href: '/configuracoes/sara', icon: Bot },
       { titulo: 'Base de conhecimento', descricao: 'Perguntas e respostas que a Sara usa.', href: '/configuracoes/sara', icon: BookOpen },
+      { titulo: 'Follow-up automático', descricao: 'Ligar/desligar e testar o follow-up por lead (preview).', href: '/configuracoes/followup', icon: Workflow },
       { titulo: 'Notificações do gestor', descricao: 'Número do gestor e eventos que avisam por WhatsApp.', href: '/configuracoes/notificacoes', icon: Bell },
+    ],
+  },
+  {
+    nome: 'Inteligência (Salomão)',
+    itens: [
+      { titulo: 'Comportamento do Salomão', descricao: 'Ativar, modelo, tom e canais de pagamento do atendente de matriculados.', href: '/configuracoes/salomao', icon: Wallet },
+      { titulo: 'Auditoria do Salomão', descricao: 'Gabarito de qualidade das conversas (5 critérios).', href: '/configuracoes/salomao/auditoria', icon: ClipboardCheck },
     ],
   },
   {
@@ -51,7 +60,8 @@ const secoes: { nome: string; itens: Item[] }[] = [
     nome: 'Integrações',
     itens: [
       { titulo: 'Google Agenda', descricao: 'Sincronize visitas com o Google Calendar.', href: '/configuracoes/integracoes', icon: CalendarCheck },
-      { titulo: 'WhatsApp (Evolution)', descricao: 'Status e conexão do WhatsApp da escola.', href: '/configuracoes/whatsapp', icon: MessageSquareText },
+      { titulo: 'WhatsApp Disparos (WAHA)', descricao: 'Conexão do canal de disparos (Salomão/convites). Chip SEPARADO do atendimento.', href: '/configuracoes/waha', icon: MessageSquareText },
+      { titulo: 'WhatsApp (Evolution)', descricao: 'Canal de disparos legado (rollback do WAHA).', href: '/configuracoes/whatsapp', icon: MessageSquareText },
       { titulo: 'WhatsApp Oficial (Meta)', descricao: 'Canal pela API oficial da Meta (Cloud API).', href: '/configuracoes/whatsapp-oficial', icon: MessageSquareText },
     ],
   },

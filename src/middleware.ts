@@ -27,6 +27,9 @@ export async function middleware(request: NextRequest) {
 
   const url = request.nextUrl
   const isAuthRoute = url.pathname.startsWith('/login')
+  // Callback do OAuth (Google): precisa passar sem exigir sessão, pois ela
+  // ainda vai ser criada dentro da rota /auth/callback.
+  const isAuthCallback = url.pathname.startsWith('/auth')
   // Rotas de API que fazem a própria autenticação (webhooks, cron e admin protegido por CRON_SECRET/sessão)
   const isApiWebhook =
     url.pathname.startsWith('/api/webhook') ||
@@ -36,6 +39,9 @@ export async function middleware(request: NextRequest) {
 
   // Webhooks do WhatsApp não precisam de auth
   if (isApiWebhook) return supabaseResponse
+
+  // Deixa o callback do OAuth (Google) completar a troca do code pela sessão
+  if (isAuthCallback) return supabaseResponse
 
   // Não logado → manda pra login
   if (!user && !isAuthRoute && !isPublic) {

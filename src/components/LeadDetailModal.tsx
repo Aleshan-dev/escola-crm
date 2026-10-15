@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { Coluna, Lead } from '@/lib/types'
 import { createClient } from '@/lib/supabase-browser'
-import { X, Bot, MessageSquare, Phone, Mail, Baby, FileText, CheckSquare, Square, Trash2, Plus, ListChecks, CheckCircle2, Circle } from 'lucide-react'
+import { X, Bot, MessageSquare, Phone, Mail, Baby, FileText, CheckSquare, Square, Trash2, Plus, ListChecks, CheckCircle2, Circle, BellOff, Bell } from 'lucide-react'
 import Link from 'next/link'
 
 function diasNaEtapa(entrou: string): number {
@@ -12,7 +12,7 @@ function diasNaEtapa(entrou: string): number {
 }
 
 type Serie = { id: string; nome: string }
-type CriancaRow = { id: string; nome: string; idade: number | null; serie_desejada: string | null; periodo: string | null }
+type CriancaRow = { id: string; nome: string; idade: number | null; idade_meses: number | null; serie_desejada: string | null; periodo: string | null }
 type Tarefa = { id: string; titulo: string; tipo: string | null; data_hora: string; concluida: boolean }
 type Anotacao = { id: string; conteudo: string; criado_em: string }
 
@@ -24,15 +24,22 @@ export function LeadDetailModal({
   lead,
   colunas,
   funis = [],
+  onArchived,
   onClose,
 }: {
   lead: Lead
   colunas: Coluna[]
   funis?: { id: string; nome: string }[]
+  onArchived?: (id: string) => void
   onClose: () => void
 }) {
   const supabase = createClient()
   const dias = diasNaEtapa(lead.entrou_coluna_em)
+  // Família matriculada é atendida pelo Salomão (não pela Sara). O botão de
+  // resposta manual precisa refletir o agente certo e ficar disponível mesmo com
+  // a IA pausada — é assim que o atendente devolve o lead ao Salomão.
+  const matriculada = (lead.familia as any)?.ja_responsavel === true
+  const agenteNome = matriculada ? 'Salomão' : 'Sara'
 
   const [colunaId, setColunaId] = useState(lead.coluna_id)
   const colAtual = colunas.find((c) => c.id === lead.coluna_id)
@@ -65,6 +72,30 @@ export function LeadDetailModal({
   const [saraLoading, setSaraLoading] = useState(false)
   const [saraMsg, setSaraMsg] = useState<string | null>(null)
 
+  const [encerradoEm, setEncerradoEm] = useState<string | null>((lead as any).followup_encerrado_em ?? null)
+  const [encerrando, setEncerrando] = useState(false)
+
+  // Encerrar tira o lead do follow-up automático (a Sara NÃO é pausada — segue
+  // respondendo se a família voltar). Reabrir devolve ao follow-up.
+  async function encerrarAtendimento(acao: 'encerrar' | 'reabrir') {
+    if (encerrando) return
+    setEncerrando(true)
+    try {
+      const r = await fetch('/api/atendimento/encerrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: lead.id, acao }),
+      })
+      const j = await r.json()
+      if (j?.ok) setEncerradoEm(acao === 'encerrar' ? new Date().toISOString() : null)
+      else alert('Erro: ' + (j?.error || `falha ao ${acao}`))
+    } catch {
+      alert(`Falha ao ${acao} o atendimento.`)
+    } finally {
+      setEncerrando(false)
+    }
+  }
+
   async function saraResponder() {
     if (saraLoading) return
     setSaraLoading(true); setSaraMsg(null)
@@ -75,7 +106,9 @@ export function LeadDetailModal({
         body: JSON.stringify({ lead_id: lead.id }),
       })
       const j = await r.json()
-      setSaraMsg(j?.ok ? 'Sara respondeu ✓' : `Falha: ${j?.error || 'erro'}`)
+      if (j?.ok) setSaraMsg(`${j?.agente === 'salomao' ? 'Salomão' : 'Sara'} respondeu ✓`)
+      else if (j?.janela_fechada) setSaraMsg(j?.aviso || 'Fora da janela de 24h — resposta encaminhada para "Alertas" para envio manual.')
+      else setSaraMsg(`Falha: ${j?.error || 'erro'}`)
     } catch {
       setSaraMsg('Falha ao acionar a Sara.')
     } finally {
@@ -168,7 +201,7 @@ export function LeadDetailModal({
     if (!lead.familia_id) return
     const { data } = await supabase
       .from('criancas')
-      .select('id, nome, idade, serie_desejada, periodo')
+      .select('id, nome, idade, idade_meses, serie_desejada, periodo')
       .eq('familia_id', lead.familia_id)
       .order('criado_em')
     setCriancasLista((data as unknown as CriancaRow[]) || [])
@@ -186,7 +219,7 @@ export function LeadDetailModal({
     const { data } = await supabase
       .from('criancas')
       .insert({ familia_id: lead.familia_id, nome: '' })
-      .select('id, nome, idade, serie_desejada, periodo')
+      .select('id, nome, idade, idade_meses, serie_desejada, periodo')
       .single()
     if (data) setCriancasLista((prev) => [...prev, data as unknown as CriancaRow])
   }
@@ -226,6 +259,7 @@ export function LeadDetailModal({
   }
 
   async function arquivarLead() {
+    onArchived?.(lead.id) // remove do funil na hora, sem esperar o Realtime
     await supabase.from('leads').update({ arquivado: true }).eq('id', lead.id)
     onClose()
   }
@@ -298,14 +332,26 @@ export function LeadDetailModal({
                         placeholder="Nome da criança"
                         className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400"
                       />
-                      <input
-                        value={c.idade ?? ''}
-                        onChange={(e) => editarCriancaLocal(c.id, { idade: e.target.value ? Number(e.target.value) : null })}
-                        onBlur={(e) => atualizarCrianca(c.id, { idade: e.target.value ? Number(e.target.value) : null })}
-                        placeholder="Idade"
-                        inputMode="numeric"
-                        className="w-20 flex-shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400"
-                      />
+                      <div className="flex flex-shrink-0 items-center gap-1">
+                        <input
+                          value={c.idade ?? ''}
+                          onChange={(e) => editarCriancaLocal(c.id, { idade: e.target.value ? Number(e.target.value) : null })}
+                          onBlur={(e) => atualizarCrianca(c.id, { idade: e.target.value ? Number(e.target.value) : null })}
+                          placeholder="anos"
+                          inputMode="numeric"
+                          className="w-16 rounded-lg border border-slate-200 px-2 py-2 text-sm outline-none focus:border-blue-400"
+                        />
+                        <span className="text-xs text-slate-400">a</span>
+                        <input
+                          value={c.idade_meses ?? ''}
+                          onChange={(e) => editarCriancaLocal(c.id, { idade_meses: e.target.value ? Number(e.target.value) : null })}
+                          onBlur={(e) => atualizarCrianca(c.id, { idade_meses: e.target.value ? Number(e.target.value) : null })}
+                          placeholder="meses"
+                          inputMode="numeric"
+                          className="w-16 rounded-lg border border-slate-200 px-2 py-2 text-sm outline-none focus:border-blue-400"
+                        />
+                        <span className="text-xs text-slate-400">m</span>
+                      </div>
                       <button onClick={() => removerCrianca(c.id)} className="flex-shrink-0 text-slate-400 hover:text-red-600" aria-label="Remover criança"><Trash2 className="w-4 h-4" /></button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -332,7 +378,7 @@ export function LeadDetailModal({
             <div className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1">
               {[
                 { label: 'Nome da criança', ok: criancasLista.some((c) => (c.nome || '').trim()) },
-                { label: 'Idade', ok: criancasLista.some((c) => c.idade != null) },
+                { label: 'Idade', ok: criancasLista.some((c) => c.idade != null || c.idade_meses != null) },
                 { label: 'Período', ok: criancasLista.some((c) => c.periodo) },
                 { label: 'Escola atual', ok: !!escolaAtual },
                 { label: 'Primeira experiência', ok: !!primeiraExp },
@@ -440,7 +486,7 @@ export function LeadDetailModal({
         </div>
 
         <div className="border-t border-slate-100 p-4 space-y-2">
-          {lead.ia_ativa && (
+          {(lead.ia_ativa || matriculada) && (
             <>
               <button
                 onClick={saraResponder}
@@ -448,8 +494,11 @@ export function LeadDetailModal({
                 className="flex items-center justify-center gap-2 w-full rounded-lg bg-green-600 text-white text-sm font-medium py-2.5 hover:bg-green-700 disabled:opacity-60"
               >
                 <Bot className="w-4 h-4" />
-                {saraLoading ? 'Sara respondendo...' : 'Sara responder agora'}
+                {saraLoading ? `${agenteNome} respondendo...` : `${agenteNome} responder agora`}
               </button>
+              {!lead.ia_ativa && matriculada && (
+                <p className="text-center text-[11px] text-amber-600">IA pausada neste lead — clicar devolve o atendimento ao Salomão.</p>
+              )}
               {saraMsg && <p className="text-center text-xs text-slate-600">{saraMsg}</p>}
             </>
           )}
@@ -457,6 +506,31 @@ export function LeadDetailModal({
             <MessageSquare className="w-4 h-4" />
             Abrir conversa
           </Link>
+          {encerradoEm ? (
+            <button
+              onClick={() => encerrarAtendimento('reabrir')}
+              disabled={encerrando}
+              title="Reabrir: o lead volta a receber follow-up automático."
+              className="flex items-center justify-center gap-2 w-full rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-medium py-2 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              <Bell className="w-4 h-4" />
+              Reabrir atendimento (volta ao follow-up)
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                if (confirm('Encerrar o atendimento?\n\nO lead sai do follow-up automático (a Sara não manda mais mensagens sozinha). Se a família voltar a escrever, a Sara ainda responde normalmente.')) {
+                  encerrarAtendimento('encerrar')
+                }
+              }}
+              disabled={encerrando}
+              title="Encerrar: tira o lead do follow-up automático. A Sara continua respondendo se a família voltar."
+              className="flex items-center justify-center gap-2 w-full rounded-lg border border-red-200 text-red-600 text-sm font-medium py-2 hover:bg-red-50 disabled:opacity-50"
+            >
+              <BellOff className="w-4 h-4" />
+              Encerrar atendimento
+            </button>
+          )}
           <button onClick={arquivarLead} className="w-full rounded-lg border border-slate-200 text-slate-600 text-sm font-medium py-2 hover:bg-slate-50">
             Arquivar lead
           </button>

@@ -83,22 +83,181 @@ async function resolverConta(phoneId?: string | null): Promise<Conta | null> {
 
 // Envio unificado: usa a conta Cloud ativa (banco) ou o env como fallback.
 // Retorna o id da mensagem (wid) ou null. Ponto único de saída do WhatsApp.
+// Canal do contato: 'waha' quando o lead conversa pelo número WAHA (não-oficial).
+// Setado pelos webhooks de entrada (pelo canal onde o lead escreveu). Roteia a
+// SAÍDA para o mesmo número — senão a resposta sai por um número diferente do
+// que o lead usou. null/'cloud' = Cloud API (atendimento oficial).
+async function contatoUsaWaha(to: string): Promise<boolean> {
+  try {
+    const { createServerAdminClient } = await import('@/lib/supabase-server')
+    const supabase = createServerAdminClient()
+    const { data } = await supabase
+      .from('familias')
+      .select('canal_whatsapp')
+      .eq('telefone', to)
+      .maybeSingle<{ canal_whatsapp: string | null }>()
+    return data?.canal_whatsapp === 'waha'
+  } catch {
+    return false
+  }
+}
+
 export async function enviarTextoWhatsApp(
   to: string,
   texto: string,
   phoneId?: string | null,
 ): Promise<string | null> {
-  const conta = await resolverConta(phoneId)
+  // Roteamento por canal: contato do WAHA responde PELO WAHA (mesmo número que
+  // ele usou). WAHA não tem janela de 24h — envia direto.
+  if (await contatoUsaWaha(to)) {
+    const { wahaSendText } = await import('@/lib/waha')
+    const sent = await wahaSendText(to, texto)
+    return sent?.key?.id || null
+  }
 
-  if (conta?.token) {
-    const sent = await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
+  // Canal Cloud oficial: conta específica (banco) ou credenciais do env — mesmo
+  // fallback do webhook (enviarTextoCloudConta → enviarTextoCloud).
+  const conta = await resolverConta(phoneId)
+  const phoneNumberId = conta?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID
+  const token = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN
+
+  if (phoneNumberId && token) {
+    const sent = await enviarTextoCloudConta(phoneNumberId, token, to, texto)
     return sent?.messages?.[0]?.id || null
   }
 
-  // Sem conta Cloud ativa: o número está conectado via Evolution -> envia pelo Evolution.
+  // Sem canal Cloud: o número está conectado via Evolution -> envia pelo Evolution.
   const { evolutionSendText } = await import('@/lib/evolution')
   const sent = await evolutionSendText(to, texto)
   return sent?.key?.id || null
+}
+
+// ============================================================================
+// Envio de MÍDIA (documento/imagem) pela equipe, a partir do chat do CRM.
+// Mesmo ponto único de saída do texto: usa a conta Cloud ativa (banco) se houver,
+// senão cai no Evolution (celular via coexistência — o canal ativo hoje).
+// ============================================================================
+
+export type MidiaSaida = {
+  base64: string        // conteúdo do arquivo (para o upload da Cloud API)
+  mimetype: string      // ex.: application/pdf, image/jpeg
+  filename: string      // nome do arquivo (aparece no WhatsApp para documentos)
+  caption?: string      // legenda opcional
+  url?: string          // URL (assinada) do arquivo — usada pelo Evolution, que baixa e envia
+}
+
+// tipo p/ o WhatsApp (image/video/audio/document) + tipo_midia p/ o banco (imagem/...).
+export function classificarMidia(mimetype: string): {
+  kind: 'image' | 'video' | 'audio' | 'document'
+  tipo: 'imagem' | 'video' | 'audio' | 'documento'
+} {
+  const m = (mimetype || '').toLowerCase()
+  if (m.startsWith('image/')) return { kind: 'image', tipo: 'imagem' }
+  if (m.startsWith('video/')) return { kind: 'video', tipo: 'video' }
+  if (m.startsWith('audio/')) return { kind: 'audio', tipo: 'audio' }
+  return { kind: 'document', tipo: 'documento' }
+}
+
+// Cloud API: sobe o binário para a Meta e devolve o media id (2 passos: upload → send).
+async function cloudUploadMedia(
+  phoneId: string, token: string, base64: string, mimetype: string, filename: string,
+): Promise<string> {
+  const buf = Buffer.from(base64, 'base64')
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('file', new Blob([buf], { type: mimetype || 'application/octet-stream' }), filename)
+  const r = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/media`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  if (!r.ok) throw new Error(`Cloud upload mídia falhou (${r.status}): ${await r.text()}`)
+  const j = await r.json()
+  if (!j?.id) throw new Error('Cloud upload mídia: resposta sem id')
+  return j.id
+}
+
+async function cloudSendMedia(
+  phoneId: string, token: string, to: string,
+  kind: 'image' | 'video' | 'audio' | 'document', mediaId: string,
+  filename: string, caption?: string,
+): Promise<string | null> {
+  const media: Record<string, string> = { id: mediaId }
+  if (kind === 'document') media.filename = filename
+  if (caption && kind !== 'audio') media.caption = caption
+  const r = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: kind, [kind]: media }),
+  })
+  if (!r.ok) throw new Error(`Cloud send mídia falhou (${r.status}): ${await r.text()}`)
+  const j = await r.json()
+  return j?.messages?.[0]?.id || null
+}
+
+/**
+ * Envia uma mídia (documento/imagem/...) para o contato. Devolve o wid e o
+ * `tipo_midia` a gravar no histórico. Lança em erro (o chamador trata janela etc.).
+ */
+export async function enviarMidiaWhatsApp(
+  to: string,
+  midia: MidiaSaida,
+  phoneId?: string | null,
+): Promise<{ wid: string | null; tipo: 'imagem' | 'video' | 'audio' | 'documento' }> {
+  const { kind, tipo } = classificarMidia(midia.mimetype)
+
+  // Roteamento por canal: contato do WAHA recebe a mídia PELO WAHA (mesmo número).
+  if (await contatoUsaWaha(to)) {
+    if (!midia.url) throw new Error('Envio de mídia por WAHA requer URL da mídia')
+    const { wahaSendMedia } = await import('@/lib/waha')
+    const sent = await wahaSendMedia(to, {
+      media: midia.url,
+      fileName: midia.filename,
+      caption: midia.caption,
+      mediatype: kind,
+      mimetype: midia.mimetype,
+    })
+    return { wid: sent?.key?.id || null, tipo }
+  }
+
+  // Canal Cloud oficial: conta específica (banco) ou credenciais do env — mesma
+  // resolução do texto (resolverConta → fallback enviarTextoCloud do webhook).
+  const conta = await resolverConta(phoneId)
+  const phoneNumberId = conta?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID
+  const token = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN
+
+  if (phoneNumberId && token) {
+    const mediaId = await cloudUploadMedia(phoneNumberId, token, midia.base64, midia.mimetype, midia.filename)
+    const wid = await cloudSendMedia(phoneNumberId, token, to, kind, mediaId, midia.filename, midia.caption)
+    return { wid, tipo }
+  }
+
+  // Sem canal Cloud: envia pelo Evolution (baixa a partir da URL assinada).
+  if (!midia.url) throw new Error('Envio por Evolution requer URL da mídia')
+  const { evolutionSendMedia } = await import('@/lib/evolution')
+  const sent = await evolutionSendMedia(to, {
+    media: midia.url,
+    fileName: midia.filename,
+    caption: midia.caption,
+    mediatype: kind,
+    mimetype: midia.mimetype,
+  })
+  return { wid: sent?.key?.id || null, tipo }
+}
+
+// Texto renderizado dos templates aprovados — para gravar no histórico do CRM o que a
+// família REALMENTE recebeu (em vez de "[template: x]"). DEVE espelhar o corpo aprovado
+// na Meta (ver /api/admin/criar-template). Se o texto lá mudar, atualize aqui também.
+export function corpoTemplate(name: string, variaveis: string[]): string {
+  const nome = variaveis[0] || 'família'
+  switch (name) {
+    case 'retomada_lead':
+      return `Olá, ${nome}! 😊 Aqui é a Sara, do Colégio Pequenos Guardiões. Passando para saber se você ainda gostaria de conhecer nossa escola e agendar uma visita. Estou por aqui para ajudar com qualquer dúvida!`
+    case 'retorno_visita':
+      return `Olá, ${nome}! Aqui é a Sara, do Colégio Pequenos Guardiões. Foi uma alegria receber vocês na visita. 💙 Como foi a experiência? Ficou alguma dúvida em que eu possa ajudar?`
+    default:
+      return `[template: ${name}]`
+  }
 }
 
 // Envia um template APROVADO (funciona a qualquer hora, sem depender da janela de 24h).

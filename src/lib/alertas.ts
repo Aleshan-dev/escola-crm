@@ -1,24 +1,35 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
 
-// Observabilidade: registra falhas do sistema e notifica o admin no WhatsApp,
-// com rate limit para não virar spam (nem gatilho de bloqueio).
+// Observabilidade: registra alertas do sistema e (opcionalmente) notifica o admin
+// no WhatsApp, com rate limit para não virar spam.
+//
+// tipo:
+//   'sistema'     -> erro técnico. Notifica o admin no WhatsApp (rate limit).
+//   'engajamento' -> envio manual fora da janela de 24h. NÃO pinga o admin
+//                    (já aparece na tela de Alertas); guarda lead_id p/ vincular.
 
 const JANELA_NOTIF_MS = 30 * 60 * 1000 // no máx. 1 notificação a cada 30 min
 
 export async function registrarAlerta(
   supabase: ReturnType<typeof createServerAdminClient>,
   contexto: string,
-  mensagem: string
+  mensagem: string,
+  opts?: { tipo?: 'sistema' | 'engajamento'; leadId?: string | null }
 ): Promise<void> {
+  const tipo = opts?.tipo ?? 'sistema'
+
   // 1) Sempre registra no banco (barato, serve de auditoria/painel)
   const { data: inserido } = await supabase
     .from('alertas_sistema')
-    .insert({ contexto, mensagem: mensagem.slice(0, 1000) })
+    .insert({ contexto, mensagem: mensagem.slice(0, 1000), tipo, lead_id: opts?.leadId ?? null })
     .select('id')
     .single()
 
-  // 2) Notifica no WhatsApp do admin, com rate limit
+  // 2) Só erros de sistema pingam o admin no WhatsApp. Engajamento aparece na
+  //    tela de Alertas (/pendentes) e não precisa de push.
+  if (tipo !== 'sistema') return
+
   try {
     const desde = new Date(Date.now() - JANELA_NOTIF_MS).toISOString()
     const { data: recentes } = await supabase

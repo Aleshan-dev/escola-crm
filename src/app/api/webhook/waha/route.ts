@@ -1,0 +1,143 @@
+import { NextRequest, NextResponse, after } from 'next/server'
+import { createServerAdminClient } from '@/lib/supabase-server'
+import { wahaSendText, resolverContatoWaha } from '@/lib/waha'
+import { registrarAlerta } from '@/lib/alertas'
+import {
+  processarMensagemRecebida,
+  registrarMensagemManual,
+  type EnviarTexto,
+} from '@/lib/atendimento'
+import { extrairConteudoMidiaWaha } from '@/lib/midia'
+
+// Webhook de ENTRADA do WAHA (canal de disparos). Espelha o /api/webhook/whatsapp
+// (Evolution), mas no formato de eventos do WAHA:
+//   { event: 'message' | 'message.any', session, payload: { from, body, fromMe, id, notifyName, hasMedia, media } }
+//
+// - 'message'      = recebidas (fromMe=false)
+// - 'message.any'  = inclui as enviadas pelo próprio número (fromMe=true), p/ capturar
+//                    respostas manuais feitas do celular (ADR-005). Dedupe por wid.
+//
+// A resposta (Sara) sai pelo PRÓPRIO WAHA (wahaSendText), não pela flag — a
+// mensagem chegou neste número, então responde por ele.
+//
+// Registro do webhook no WAHA: ver /api/waha/webhook-register (ou o botão na tela).
+// Middleware libera /api/webhook/* sem sessão; opcionalmente exige ?secret=<WAHA_WEBHOOK_SECRET>.
+
+export const maxDuration = 60
+
+export async function GET() {
+  return NextResponse.json({ ok: true, msg: 'Webhook WAHA online' })
+}
+
+const enviarWaha: EnviarTexto = async (telefone, texto) => {
+  const sent = await wahaSendText(telefone, texto)
+  return sent?.key?.id || null
+}
+
+// id da mensagem no webhook do WAHA: string, ou objeto com _serialized.
+function widDe(id: unknown): string {
+  if (!id) return ''
+  if (typeof id === 'string') return id
+  const o = id as { _serialized?: string; id?: string }
+  return o._serialized || o.id || ''
+}
+
+export async function POST(req: NextRequest) {
+  const supabase = createServerAdminClient()
+
+  // Segurança opcional: se WAHA_WEBHOOK_SECRET existir, exige ?secret= na URL.
+  const secret = process.env.WAHA_WEBHOOK_SECRET
+  if (secret && new URL(req.url).searchParams.get('secret') !== secret) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  }
+
+  try {
+    const body = await req.json()
+    const event: string = body?.event || ''
+    if (event !== 'message' && event !== 'message.any') {
+      return NextResponse.json({ ignored: event })
+    }
+
+    const p = body?.payload || {}
+
+    const from: string = p?.from || ''
+    // Ignora grupos, status/stories e newsletters.
+    if (!from || from.includes('@g.us') || from.includes('@broadcast') || from.includes('@newsletter')) {
+      return NextResponse.json({ ignored: 'grupo/status/sem from' })
+    }
+
+    // Resolve o contato: telefone real + nome do WhatsApp. O `from` pode vir como
+    // @lid (sem telefone e sem nome no payload) — o resolver pergunta ao WAHA.
+    // Conserta casamento de família, destino da resposta E o nome do lead.
+    const { telefone, nome } = await resolverContatoWaha(from)
+
+    const texto: string = p?.body || ''
+    const pushName: string = nome || p?.notifyName || p?._data?.notifyName || 'Família'
+    const wid = widDe(p?.id)
+
+    // fromMe: mensagem saída do próprio número (Sara via API ou resposta manual no celular).
+    if (p?.fromMe === true) {
+      const conteudoOut = texto || '[mídia]'
+      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid })
+      await supabase.from('familias').update({ canal_whatsapp: 'waha' }).eq('telefone', telefone)
+      return NextResponse.json({ ok: true, fromMe: status })
+    }
+
+    // Responde o webhook na hora; processa em segundo plano (baixar/transcrever
+    // mídia + debounce de 15s rodam sem segurar a resposta ao WAHA, evitando retry).
+    after(async () => {
+      try {
+        let conteudo = texto
+        let tipoMidia = 'texto'
+        let urlMidia: string | null = null
+
+        // Mídia: baixa do WAHA, salva no storage e interpreta (áudio→transcrição,
+        // imagem→descrição). O caption entra junto do texto interpretado.
+        if (p?.hasMedia) {
+          const m = await extrairConteudoMidiaWaha(p)
+          if (m) { conteudo = m.conteudo; tipoMidia = m.tipoMidia; urlMidia = m.urlMidia }
+        }
+        if (!conteudo) {
+          conteudo =
+            '[O responsável enviou uma mídia que não consigo abrir por aqui. Agradeça com gentileza e, se parecer importante, peça para reenviar como texto. NÃO presuma o assunto — em especial, NÃO trate como comprovante de pagamento.]'
+        }
+
+        await processarMensagemRecebida(supabase, {
+          telefone,
+          conteudo,
+          pushName,
+          wid,
+          origem: 'whatsapp',
+          tag: 'whatsapp',
+          enviarTexto: enviarWaha,
+          canal: 'organico',
+          tipoMidia,
+          urlMidia,
+        })
+        // Marca o canal do contato: a saída (manual e automática) deve sair pelo
+        // WAHA — o mesmo número onde o lead escreveu. (Diferente do `canal` acima,
+        // que é atribuição de marketing.)
+        await supabase.from('familias').update({ canal_whatsapp: 'waha' }).eq('telefone', telefone)
+
+        // Corrige o nome de leads que ficaram como "Família" (criados antes de
+        // termos o nome do WhatsApp). Só sobrescreve o placeholder, nunca um nome real.
+        if (nome) {
+          await supabase.from('familias')
+            .update({ nome_responsavel: nome })
+            .eq('telefone', telefone)
+            .or('nome_responsavel.is.null,nome_responsavel.eq.Família')
+        }
+      } catch (e) {
+        console.error('Webhook WAHA (after) erro:', e)
+        await registrarAlerta(supabase, 'webhook/waha', e instanceof Error ? e.message : String(e))
+      }
+    })
+
+    return NextResponse.json({ ok: true })
+  } catch (e: unknown) {
+    console.error('Webhook WAHA error:', e)
+    const msg = e instanceof Error ? e.message : 'Erro desconhecido'
+    await registrarAlerta(supabase, 'webhook/waha', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+}

@@ -4,224 +4,353 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
-import { Loader2, ShieldCheck, RefreshCw, Lightbulb, ThumbsUp, Target, Pencil, ArrowRight, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Sparkles, ThumbsUp, ThumbsDown, ShieldCheck } from 'lucide-react'
 
-type Criterios = {
-  acolhimento: number; humanizacao: number; diagnostico: number; escuta_ativa: number; construcao_valor: number
-  objecoes: number; convite_visita: number; comunicacao: number; followup: number; probabilidade_matricula: number
-}
-type Reescrita = { original: string; sugestao: string }
-type Detalhe = {
-  lead_id: string; responsavel: string; nota: number; criterios: Criterios
-  pontos_fortes: string[]; oportunidades: string[]; mensagens_reescrever: Reescrita[]
-  melhor_resposta: string; proxima_acao: string; classificacao: string; estagio_funil: string; resumo: string
-}
-type Auditoria = {
-  id: string; conversas_analisadas: number; nota_geral: number | null; resumo: string | null
-  achados: string[]; sugestoes: string[]; detalhes: Detalhe[]; criado_em: string
-}
-type Conversa = Detalhe & { _key: string; _data: string }
+// ADR-006 Nível 1: revisão humana das sugestões do Auditor Cognitivo.
+// Aplicar = confirmo o diagnóstico (conta para a recorrência de Nível 2).
+// Rejeitar = descarto. Regras candidatas: critérios cujo gap se repete.
 
-const CRITERIOS: { key: keyof Criterios; label: string; max: number }[] = [
-  { key: 'acolhimento', label: 'Acolhimento', max: 10 },
-  { key: 'humanizacao', label: 'Humanização', max: 10 },
-  { key: 'diagnostico', label: 'Diagnóstico', max: 10 },
-  { key: 'escuta_ativa', label: 'Escuta ativa', max: 10 },
-  { key: 'construcao_valor', label: 'Construção de valor', max: 10 },
-  { key: 'objecoes', label: 'Objeções', max: 10 },
-  { key: 'convite_visita', label: 'Convite p/ visita', max: 10 },
-  { key: 'comunicacao', label: 'Comunicação', max: 10 },
-  { key: 'followup', label: 'Follow-up', max: 10 },
-  { key: 'probabilidade_matricula', label: 'Prob. matrícula', max: 100 },
-]
+const REGRA_MIN = 3 // ocorrências validadas p/ virar candidata a regra (Nível 2)
 
-function corNota(n: number | null) {
-  if (n == null) return 'text-slate-400'
-  if (n >= 80) return 'text-green-600'
-  if (n >= 60) return 'text-amber-600'
-  return 'text-red-600'
+const CRITERIO_LABEL: Record<string, string> = {
+  conexao_inicial: 'Conexão inicial',
+  qualificacao: 'Qualificação',
+  diagnostico: 'Diagnóstico',
+  construcao_valor: 'Construção de valor',
+  convite: 'Convite',
+  clareza: 'Clareza',
+  continuidade: 'Continuidade',
+  fluencia: 'Fluência',
+  confianca: 'Confiança',
+  objecao_preco: 'Objeção de preço',
+  reagendamento: 'Reagendamento',
+  fechamento: 'Fechamento',
+  confirmacao: 'Confirmação',
+  reativacao: 'Reativação',
+  diagnostico_perda: 'Diagnóstico da perda',
+  nenhum: 'Sem gap',
 }
-function corClass(c: string) {
-  const l = (c || '').toLowerCase()
-  if (l.includes('quente')) return 'bg-red-100 text-red-700'
-  if (l.includes('morno')) return 'bg-amber-100 text-amber-700'
-  return 'bg-slate-100 text-slate-600'
-}
-function barraCor(pct: number) {
-  if (pct >= 0.8) return '#16a34a'
-  if (pct >= 0.6) return '#d97706'
-  return '#dc2626'
-}
-function Criterio({ label, valor, max }: { label: string; valor: number; max: number }) {
-  const pct = max ? valor / max : 0
-  return (
-    <div className="flex items-center gap-2">
-      <span className="w-32 truncate text-[11px] text-slate-500">{label}</span>
-      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-        <div className="h-full rounded-full" style={{ width: `${pct * 100}%`, background: barraCor(pct) }} />
-      </div>
-      <span className="w-10 text-right text-[11px] font-medium text-slate-600">{max === 100 ? `${valor}%` : `${valor}/${max}`}</span>
-    </div>
-  )
+
+function faixaBadge(faixa: string | null) {
+  const map: Record<string, string> = {
+    quente: 'bg-green-100 text-green-800',
+    morno: 'bg-amber-100 text-amber-800',
+    frio: 'bg-slate-200 text-slate-700',
+  }
+  return map[faixa || ''] || 'bg-slate-100 text-slate-600'
 }
 
 export default function AuditoriaPage() {
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
   const [rodando, setRodando] = useState(false)
-  const [lista, setLista] = useState<Auditoria[]>([])
-  const [abertos, setAbertos] = useState<Set<string>>(new Set())
+  const [email, setEmail] = useState('')
+  const [sugestoes, setSugestoes] = useState<any[]>([])
+  const [regras, setRegras] = useState<any[]>([])
+  const [editando, setEditando] = useState<string | null>(null)
+  const [textoRegra, setTextoRegra] = useState('')
+  const [taxaAtual, setTaxaAtual] = useState<number | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
 
   async function carregar() {
-    const { data } = await supabase.from('auditorias_sara').select('*').order('criado_em', { ascending: false }).limit(30)
-    setLista((data as unknown as Auditoria[]) || [])
+    const [sg, rg, tx] = await Promise.all([
+      supabase
+        .from('sugestoes_auditoria')
+        .select('*, lead:leads(id, familia:familias(nome_responsavel))')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('regras_aprendidas')
+        .select('*')
+        .eq('ativa', true)
+        .order('criada_em', { ascending: false }),
+      supabase.rpc('taxa_comparecimento', { desde: null, ate: new Date().toISOString() }),
+    ])
+    setSugestoes((sg.data as any[]) || [])
+    setRegras((rg.data as any[]) || [])
+    setTaxaAtual(typeof tx.data === 'number' ? tx.data : null)
     setLoading(false)
   }
-  useEffect(() => { carregar() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
-  async function rodarAgora() {
-    if (rodando) return
-    setRodando(true)
-    try { await fetch('/api/admin/rodar-auditoria', { method: 'POST' }); await carregar() } finally { setRodando(false) }
+  useEffect(() => {
+    (async () => {
+      const { data: u } = await supabase.auth.getUser()
+      setEmail(u?.user?.email || '')
+      await carregar()
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function revisar(id: string, status: 'validada' | 'rejeitada') {
+    setSugestoes((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
+    await supabase
+      .from('sugestoes_auditoria')
+      .update({ status, revisado_por: email, revisado_em: new Date().toISOString() })
+      .eq('id', id)
   }
 
-  // Agregado geral (todas as conversas de todas as auditorias carregadas)
-  const g = useMemo(() => {
-    const conversas: Conversa[] = lista.flatMap((a) =>
-      (a.detalhes || []).map((d, i) => ({ ...d, _key: `${a.id}-${i}`, _data: a.criado_em }))
-    )
-    const notas = conversas.map((c) => c.nota).filter((n) => n > 0)
-    const notaGeral = notas.length ? Math.round(notas.reduce((s, n) => s + n, 0) / notas.length) : null
-    const mediaCrit = (k: keyof Criterios) => {
-      const vals = conversas.map((c) => c.criterios?.[k] ?? 0)
-      return vals.length ? Math.round(vals.reduce((s, n) => s + n, 0) / vals.length) : 0
+  // Nível 2: promove uma candidata recorrente a REGRA GLOBAL (versionada, reversível).
+  async function criarRegra(criterio: string, n: number, texto: string) {
+    const t = texto.trim()
+    if (!t) return
+    // Guardrail do COO: fotografa a taxa conversa→compareceu ANTES da regra (baseline).
+    const { data: baseline } = await supabase.rpc('taxa_comparecimento', { desde: null, ate: new Date().toISOString() })
+    const { data: nova } = await supabase
+      .from('regras_aprendidas')
+      .insert({
+        texto_regra: t,
+        origem_hash: criterio,
+        n_observacoes: n,
+        status: 'ativa',
+        ativa: true,
+        criada_por: email || 'crm',
+        kpi_baseline: baseline ?? null,
+      })
+      .select('id')
+      .single()
+    if (nova?.id) {
+      await supabase.from('regras_eventos').insert({ regra_id: nova.id, acao: 'aplicar', por: email || 'crm' })
     }
-    const recomendacoes = lista[0]?.sugestoes || []
-    return { conversas, notaGeral, mediaCrit, recomendacoes, totalAuditorias: lista.length }
-  }, [lista])
-
-  function toggle(k: string) {
-    setAbertos((prev) => {
-      const n = new Set(prev)
-      n.has(k) ? n.delete(k) : n.add(k)
-      return n
-    })
+    setEditando(null)
+    setTextoRegra('')
+    setAviso(`Regra criada e ativa. A Sara já a segue no próximo atendimento.`)
+    await carregar()
   }
+
+  // Rollback: desativa uma regra (a Sara para de segui-la imediatamente).
+  async function desativarRegra(id: string) {
+    await supabase
+      .from('regras_aprendidas')
+      .update({ ativa: false, status: 'aposentada', aposentada_em: new Date().toISOString(), motivo: 'Desativada manualmente' })
+      .eq('id', id)
+    await supabase.from('regras_eventos').insert({ regra_id: id, acao: 'aposentar', por: email || 'crm' })
+    await carregar()
+  }
+
+  async function auditarAgora() {
+    setRodando(true)
+    setAviso(null)
+    try {
+      const r = await fetch('/api/cron/auditor', { method: 'POST' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || 'falha')
+      setAviso(`Auditoria concluída: ${j.auditadas ?? 0} conversa(s) auditada(s).`)
+      await carregar()
+    } catch (e) {
+      setAviso(`Erro ao auditar: ${e instanceof Error ? e.message : 'desconhecido'}`)
+    } finally {
+      setRodando(false)
+    }
+  }
+
+  const pendentes = useMemo(() => sugestoes.filter((s) => s.status === 'pendente'), [sugestoes])
+  const validadas = useMemo(() => sugestoes.filter((s) => s.status === 'validada'), [sugestoes])
+  const rejeitadas = useMemo(() => sugestoes.filter((s) => s.status === 'rejeitada'), [sugestoes])
+
+  // Regras candidatas (Nível 2): critérios cujo gap validado se repete.
+  const candidatas = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const s of validadas) m.set(s.criterio, (m.get(s.criterio) || 0) + 1)
+    return [...m.entries()].map(([criterio, n]) => ({ criterio, n })).sort((a, b) => b.n - a.n)
+  }, [validadas])
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen bg-[#F5F6FA] pl-16">
       <Topbar />
-      <div className="mx-auto w-full max-w-3xl p-5">
-        <div className="mb-4 flex items-center justify-between">
+      <main className="mx-auto max-w-5xl p-6 md:p-8">
+        <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="flex items-center gap-2 text-xl font-semibold"><ShieldCheck className="h-5 w-5 text-blue-600" /> Auditoria da Sara</h1>
-            <p className="text-sm text-slate-500">Visão geral do atendimento — clique numa conversa para ver os detalhes.</p>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-[#1A237E]">
+              <ShieldCheck className="h-6 w-6" /> Auditoria da Sara
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Sugestões do Auditor Cognitivo, previstas para <strong>comparecimento à visita</strong>. Aplicar confirma o diagnóstico; a recorrência vira regra.
+            </p>
           </div>
-          <button onClick={rodarAgora} disabled={rodando} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-60">
-            {rodando ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {rodando ? 'Analisando...' : 'Rodar agora'}
+          <button
+            onClick={auditarAgora}
+            disabled={rodando}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#1A237E] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#151d63] disabled:opacity-60"
+          >
+            {rodando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {rodando ? 'Auditando…' : 'Auditar agora'}
           </button>
         </div>
 
-        {loading ? (
-          <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Carregando...</div>
-        ) : g.conversas.length === 0 ? (
-          <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Ainda não há avaliações. Clique em &quot;Rodar agora&quot; para gerar a primeira.</div>
-        ) : (
-          <div className="space-y-4">
-            {/* Dashboard geral */}
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="mb-4 flex items-baseline gap-3">
-                <span className={`text-4xl font-bold ${corNota(g.notaGeral)}`}>{g.notaGeral ?? '—'}</span>
-                <div className="text-sm text-slate-500">
-                  <div>nota geral média</div>
-                  <div className="text-xs text-slate-400">{g.conversas.length} conversa(s) · {g.totalAuditorias} auditoria(s)</div>
-                </div>
-              </div>
-              <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                {CRITERIOS.map((c) => <Criterio key={c.key} label={c.label} valor={g.mediaCrit(c.key)} max={c.max} />)}
-              </div>
+        {aviso && (
+          <div className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">{aviso}</div>
+        )}
+
+        {/* KPI-estrela */}
+        <div className="mb-4 flex items-center gap-3 rounded-xl border border-[#1A237E]/20 bg-white p-4">
+          <div className="text-3xl font-bold text-[#1A237E]">{taxaAtual != null ? `${taxaAtual}%` : '—'}</div>
+          <div className="text-sm text-slate-600">
+            <div className="font-semibold text-slate-700">Taxa conversa → compareceu</div>
+            <div className="text-xs text-slate-400">O número que o auditor existe para mover. Toda regra é medida contra ele.</div>
+          </div>
+        </div>
+
+        {/* Contadores */}
+        <div className="mb-6 grid grid-cols-3 gap-3">
+          {[
+            { label: 'Pendentes', v: pendentes.length },
+            { label: 'Aplicadas', v: validadas.length },
+            { label: 'Rejeitadas', v: rejeitadas.length },
+          ].map((c) => (
+            <div key={c.label} className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="text-2xl font-bold text-slate-800">{c.v}</div>
+              <div className="text-xs text-slate-500">{c.label}</div>
             </div>
+          ))}
+        </div>
 
-            {/* Recomendações consolidadas (última auditoria) */}
-            {g.recomendacoes.length > 0 && (
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-indigo-900"><Lightbulb className="h-4 w-4" /> Recomendações</div>
-                <ul className="space-y-1.5">{g.recomendacoes.map((s, i) => <li key={i} className="text-sm text-slate-700">• {s}</li>)}</ul>
-              </div>
-            )}
-
-            {/* Conversas avaliadas — expansíveis */}
-            <div>
-              <div className="mb-2 text-sm font-semibold text-slate-700">Conversas avaliadas</div>
-              <div className="space-y-2">
-                {g.conversas.map((d) => {
-                  const aberto = abertos.has(d._key)
-                  return (
-                    <div key={d._key} className="rounded-xl border border-slate-200 bg-white">
-                      <button onClick={() => toggle(d._key)} className="flex w-full items-center gap-2 p-3 text-left">
-                        {aberto ? <ChevronDown className="h-4 w-4 flex-shrink-0 text-slate-400" /> : <ChevronRight className="h-4 w-4 flex-shrink-0 text-slate-400" />}
-                        <span className="text-sm font-medium">{d.responsavel}</span>
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${corClass(d.classificacao)}`}>{d.classificacao}</span>
-                        <span className="hidden text-[11px] text-slate-400 sm:inline">{d.estagio_funil}</span>
-                        <span className="ml-auto text-[11px] text-slate-400">{new Date(d._data).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
-                        <span className={`text-lg font-bold ${corNota(d.nota)}`}>{d.nota}</span>
-                      </button>
-
-                      {aberto && (
-                        <div className="space-y-3 border-t border-slate-100 p-4">
-                          <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                            {CRITERIOS.map((c) => <Criterio key={c.key} label={c.label} valor={(d.criterios?.[c.key] ?? 0) as number} max={c.max} />)}
-                          </div>
-                          {d.resumo && <p className="text-xs text-slate-600">{d.resumo}</p>}
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            {d.pontos_fortes?.length > 0 && (
-                              <div>
-                                <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-green-700"><ThumbsUp className="h-3.5 w-3.5" /> Pontos fortes</div>
-                                <ul className="space-y-0.5">{d.pontos_fortes.map((p, j) => <li key={j} className="text-xs text-slate-600">• {p}</li>)}</ul>
-                              </div>
-                            )}
-                            {d.oportunidades?.length > 0 && (
-                              <div>
-                                <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-amber-700"><Target className="h-3.5 w-3.5" /> Oportunidades</div>
-                                <ul className="space-y-0.5">{d.oportunidades.map((p, j) => <li key={j} className="text-xs text-slate-600">• {p}</li>)}</ul>
-                              </div>
-                            )}
-                          </div>
-                          {d.mensagens_reescrever?.length > 0 && (
-                            <div>
-                              <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-700"><Pencil className="h-3.5 w-3.5" /> Mensagens para reescrever</div>
-                              <div className="space-y-1.5">
-                                {d.mensagens_reescrever.map((m, j) => (
-                                  <div key={j} className="rounded-lg bg-slate-50 p-2 text-xs">
-                                    <div className="text-slate-400 line-through">{m.original}</div>
-                                    <div className="text-slate-700">↳ {m.sugestao}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {d.melhor_resposta && (
-                            <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-2 text-xs">
-                              <span className="font-semibold text-blue-800">Melhor resposta agora: </span><span className="text-slate-700">{d.melhor_resposta}</span>
-                            </div>
-                          )}
-                          {d.proxima_acao && (
-                            <div className="flex items-start gap-1.5 text-xs text-slate-700">
-                              <ArrowRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-                              <span><span className="font-semibold">Próxima ação:</span> {d.proxima_acao}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
+        {/* Regras ATIVAS (Nível 2) — a Sara segue estas hoje */}
+        {regras.length > 0 && (
+          <div className="mb-6 rounded-xl border border-[#1A237E]/20 bg-[#1A237E]/5 p-4">
+            <h2 className="mb-3 text-sm font-semibold text-[#1A237E]">Regras ativas da Sara ({regras.length})</h2>
+            <div className="space-y-2">
+              {regras.map((r) => {
+                const base = typeof r.kpi_baseline === 'number' ? r.kpi_baseline : null
+                const pos = typeof r.kpi_pos === 'number' ? r.kpi_pos : null
+                const lift = base != null && pos != null ? Math.round((pos - base) * 10) / 10 : null
+                return (
+                  <div key={r.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="min-w-0">
+                      <div className="text-sm text-slate-700">
+                        <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                          {CRITERIO_LABEL[r.origem_hash] || r.origem_hash || 'regra'}
+                        </span>
+                        {r.texto_regra}
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">
+                          compareceu: {base != null ? `${base}%` : '—'} → {pos != null ? `${pos}%` : 'medindo…'}
+                        </span>
+                        {lift != null && (
+                          <span className={`rounded px-1.5 py-0.5 font-medium ${lift > 0 ? 'bg-green-100 text-green-700' : lift < 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
+                            {lift > 0 ? `▲ +${lift}pp` : lift < 0 ? `▼ ${lift}pp (sem lift — reveja)` : '→ 0pp'}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  )
-                })}
-              </div>
+                    <button
+                      onClick={() => desativarRegra(r.id)}
+                      className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:bg-slate-50"
+                      title="Desativar (a Sara para de seguir esta regra)"
+                    >
+                      Desativar
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
-      </div>
+
+        {/* Regras candidatas (Nível 2) */}
+        {candidatas.length > 0 && (
+          <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="mb-3 text-sm font-semibold text-slate-700">Regras candidatas (padrões que se repetem)</h2>
+            <div className="space-y-2">
+              {candidatas.map((c) => {
+                const ok = c.n >= REGRA_MIN
+                const jaTemRegra = regras.some((r) => r.origem_hash === c.criterio)
+                const rep = validadas.find((s) => s.criterio === c.criterio)?.sugestao || ''
+                return (
+                  <div key={c.criterio} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-slate-700">
+                        {CRITERIO_LABEL[c.criterio] || c.criterio}
+                        <span className="ml-2 text-xs text-slate-400">{c.n} aplicaç{c.n === 1 ? 'ão' : 'ões'}</span>
+                      </span>
+                      {jaTemRegra ? (
+                        <span className="text-xs text-[#1A237E]">✓ já é regra ativa</span>
+                      ) : ok ? (
+                        <button
+                          onClick={() => { setEditando(c.criterio); setTextoRegra(rep) }}
+                          className="rounded-lg bg-[#1A237E] px-3 py-1 text-xs font-semibold text-white transition hover:bg-[#151d63]"
+                        >
+                          Aplicar como regra
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">faltam {REGRA_MIN - c.n} p/ virar regra</span>
+                      )}
+                    </div>
+                    {editando === c.criterio && (
+                      <div className="mt-3">
+                        <textarea
+                          value={textoRegra}
+                          onChange={(e) => setTextoRegra(e.target.value)}
+                          rows={2}
+                          placeholder="Regra abstrata para a Sara (sem dados de nenhuma família específica)."
+                          className="w-full rounded-lg border border-slate-300 p-2 text-sm"
+                        />
+                        <p className="mt-1 text-xs text-slate-400">Escreva um padrão geral, sem PII. Ex.: “Ao perguntarem o valor, ancore com um ‘a partir de R$X’ antes de convidar para a visita.”</p>
+                        <div className="mt-2 flex gap-2">
+                          <button onClick={() => criarRegra(c.criterio, c.n, textoRegra)} className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700">Confirmar regra</button>
+                          <button onClick={() => { setEditando(null); setTextoRegra('') }} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">Cancelar</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <p className="mt-3 text-xs text-slate-400">
+              Ao atingir {REGRA_MIN} aplicações do mesmo critério, você pode promovê-lo a regra global — versionada e reversível (Nível 2).
+            </p>
+          </div>
+        )}
+
+        {/* Lista de sugestões pendentes */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : pendentes.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
+            Nenhuma sugestão pendente. Clique em <strong>Auditar agora</strong> para o Auditor analisar as conversas de captação.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pendentes.map((s) => (
+              <div key={s.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-800">
+                      {s.lead?.familia?.nome_responsavel || 'Família'}
+                    </span>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${faixaBadge(s.faixa)}`}>
+                      {s.faixa || '—'}{typeof s.score_preditivo === 'number' ? ` · ${s.score_preditivo}` : ''}
+                    </span>
+                    {typeof s.probabilidade_holistica === 'number' && (
+                      <span className="text-xs text-slate-400">prob. comparecer ~{s.probabilidade_holistica}%</span>
+                    )}
+                  </div>
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                    {CRITERIO_LABEL[s.criterio] || s.criterio}
+                  </span>
+                </div>
+                {s.diagnostico && <p className="mb-1 text-sm text-slate-600"><strong>Gap:</strong> {s.diagnostico}</p>}
+                <p className="mb-3 text-sm text-slate-800"><strong>Sugestão:</strong> {s.sugestao}</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => revisar(s.id, 'validada')}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-green-700"
+                  >
+                    <ThumbsUp className="h-4 w-4" /> Aplicar
+                  </button>
+                  <button
+                    onClick={() => revisar(s.id, 'rejeitada')}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                  >
+                    <ThumbsDown className="h-4 w-4" /> Rejeitar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
     </div>
   )
 }

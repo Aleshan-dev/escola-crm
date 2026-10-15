@@ -9,6 +9,7 @@ export async function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
     {
+      db: { schema: 'crm' },
       cookies: {
         getAll() {
           return cookieStore.getAll()
@@ -32,6 +33,6 @@ export function createServerAdminClient() {
   return createServiceClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SECRET_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    { db: { schema: 'crm' }, auth: { autoRefreshToken: false, persistSession: false } }
   )
 }

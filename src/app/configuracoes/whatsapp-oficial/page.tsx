@@ -5,10 +5,15 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
-import { ArrowLeft, Loader2, MessageSquareText } from 'lucide-react'
+import { ArrowLeft, Loader2, MessageSquareText, Smartphone } from 'lucide-react'
 
-const APP_ID = '2451104688636688'
-const CONFIG_ID = '1555408462970300'
+// APP_ID e CONFIG_ID vêm do env para não ficarem chumbados no bundle.
+// IMPORTANTE: o CONFIG_ID precisa ser de uma Configuration **v4** do Embedded
+// Signup (v2 é descontinuada em 15/out/2026) e habilitada para Coexistência.
+const APP_ID = process.env.NEXT_PUBLIC_META_APP_ID || '2451104688636688'
+const CONFIG_ID = process.env.NEXT_PUBLIC_META_CONFIG_ID || '1555408462970300'
+// Versão do JS SDK do Facebook. Mantida em uma constante para bump fácil.
+const FB_SDK_VERSION = process.env.NEXT_PUBLIC_META_FB_VERSION || 'v23.0'
 
 type Conta = {
   id: string
@@ -41,7 +46,7 @@ export default function WhatsappOficialPage() {
   useEffect(() => {
     if (document.getElementById('fb-sdk')) return
     ;(window as any).fbAsyncInit = function () {
-      ;(window as any).FB.init({ appId: APP_ID, autoLogAppEvents: true, xfbml: false, version: 'v21.0' })
+      ;(window as any).FB.init({ appId: APP_ID, autoLogAppEvents: true, xfbml: false, version: FB_SDK_VERSION })
     }
     const s = document.createElement('script')
     s.id = 'fb-sdk'; s.async = true; s.defer = true; s.crossOrigin = 'anonymous'
@@ -49,13 +54,20 @@ export default function WhatsappOficialPage() {
     document.body.appendChild(s)
   }, [])
 
-  // Captura phone_number_id / waba_id que o Embedded Signup envia via postMessage
+  // Captura os dados que o Embedded Signup envia via postMessage.
+  // Em Coexistência (CoEx), o evento de conclusão é
+  // FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING e traz o waba_id (o phone_number_id
+  // pode vir vazio — o backend resolve pela WABA). Guardamos também o flag coex
+  // para o backend PULAR o /register (o número já está registrado no app).
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
       if (typeof ev.origin !== 'string' || !ev.origin.endsWith('facebook.com')) return
       try {
         const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data
-        if (d?.type === 'WA_EMBEDDED_SIGNUP') (window as any).__wa_signup = d.data || {}
+        if (d?.type !== 'WA_EMBEDDED_SIGNUP') return
+        const prev = (window as any).__wa_signup || {}
+        const coex = d?.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING' || prev.coex === true
+        ;(window as any).__wa_signup = { ...prev, ...(d.data || {}), coex }
       } catch { /* ignore */ }
     }
     window.addEventListener('message', onMessage)
@@ -66,6 +78,7 @@ export default function WhatsappOficialPage() {
     const FB = (window as any).FB
     if (!FB) { setMsg('SDK do Facebook ainda carregando — tente de novo em alguns segundos.'); return }
     setMsg(''); setConectando(true)
+    ;(window as any).__wa_signup = {} // limpa estado de tentativa anterior
     FB.login(
       (resp: any) => {
         const code = resp?.authResponse?.code
@@ -74,13 +87,25 @@ export default function WhatsappOficialPage() {
         fetch('/api/whatsapp-cloud/embedded-signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, phone_number_id: info.phone_number_id, waba_id: info.waba_id }),
+          body: JSON.stringify({
+            code,
+            phone_number_id: info.phone_number_id,
+            waba_id: info.waba_id,
+            coex: info.coex === true,
+          }),
         })
           .then((r) => r.json())
           .then((j) => {
             setConectando(false)
-            if (j?.ok) { setMsg('Número conectado com sucesso! 🎉'); carregar() }
-            else setMsg('Falha ao conectar: ' + (j?.erro || 'erro desconhecido') + (j?.detalhe ? ` — ${typeof j.detalhe === 'string' ? j.detalhe : JSON.stringify(j.detalhe)}` : ''))
+            if (j?.ok) {
+              const aviso = j?.coex
+                ? 'Número conectado em Coexistência! 🎉 O celular continua funcionando. Sincronização de contatos e histórico iniciada (leva alguns minutos).'
+                : 'Número conectado com sucesso! 🎉'
+              setMsg(aviso + (j?.on_biz_app === false ? ' ⚠️ Atenção: is_on_biz_app veio FALSE — confirme a Config v4/CoEx.' : ''))
+              carregar()
+            } else {
+              setMsg('Falha ao conectar: ' + (j?.erro || 'erro desconhecido') + (j?.detalhe ? ` — ${typeof j.detalhe === 'string' ? j.detalhe : JSON.stringify(j.detalhe)}` : ''))
+            }
           })
           .catch(() => { setConectando(false); setMsg('Falha ao salvar a conexão.') })
       },
@@ -88,7 +113,13 @@ export default function WhatsappOficialPage() {
         config_id: CONFIG_ID,
         response_type: 'code',
         override_default_response_type: true,
-        extras: { setup: {} },
+        extras: {
+          setup: {},
+          // Ativa a tela de Coexistência (conectar o número existente do
+          // WhatsApp Business App em vez da seleção padrão de WABA).
+          featureType: 'whatsapp_business_app_onboarding',
+          sessionInfoVersion: '3',
+        },
       }
     )
   }
@@ -108,11 +139,22 @@ export default function WhatsappOficialPage() {
 
         <div className="mb-1 flex items-center gap-2">
           <MessageSquareText className="h-5 w-5 text-[#1A237E]" />
-          <h1 className="text-xl font-bold text-slate-900">WhatsApp Oficial (Meta)</h1>
+          <h1 className="text-xl font-bold text-slate-900">WhatsApp Oficial (Meta) — Coexistência</h1>
         </div>
         <p className="mb-5 text-sm text-slate-500">
-          Conecte um número pela API oficial da Meta (Cloud API). Funciona mesmo com o celular desligado.
+          Conecte o número da escola pela API oficial da Meta mantendo o <strong>app do celular funcionando</strong> ao
+          mesmo tempo (Coexistência). A automação do CRM e o atendimento manual pelo telefone passam a conviver no
+          mesmo número.
         </p>
+
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+          <Smartphone className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Ao concluir a conexão, todos os aparelhos vinculados (WhatsApp Web / dispositivos companheiros) são
+            deslogados e precisam ser reconectados. Edição/apagar mensagem deixam de funcionar no número. Você tem
+            <strong> 24h</strong> para a sincronização concluir.
+          </span>
+        </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5">
           <button
@@ -120,7 +162,7 @@ export default function WhatsappOficialPage() {
             disabled={conectando}
             className="rounded-lg bg-[#1A237E] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#283593] disabled:opacity-60"
           >
-            {conectando ? 'Conectando...' : 'Conectar WhatsApp'}
+            {conectando ? 'Conectando...' : 'Conectar número existente (Coexistência)'}
           </button>
           {msg && <p className="mt-3 text-sm text-slate-600">{msg}</p>}
 

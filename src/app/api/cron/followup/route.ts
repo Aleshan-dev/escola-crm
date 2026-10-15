@@ -187,10 +187,17 @@ export async function GET(req: NextRequest) {
   if (!autenticado) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
+  return NextResponse.json(await executarFollowup())
+}
 
-  const agora = Date.now()
+// Núcleo do follow-up, chamável pelo cron GET acima E EM PROCESSO pelo heartbeat
+// (rede de segurança se o cron dedicado da Vercel morrer sozinho — ADR-008; já
+// aconteceu 23/07, 10/09). Roda a lógica direto, sem o salto HTTP frágil que dependia
+// de NEXT_PUBLIC_APP_URL/CRON_SECRET/SSO. Auto-gateia em horário comercial e
+// followup_ativo, então é seguro chamar de qualquer origem já autenticada.
+export async function executarFollowup(agora: number = Date.now()) {
   if (!dentroHorarioComercial(agora)) {
-    return NextResponse.json({ skipped: `fora_do_horario_comercial (${horaAcre(agora)}h Acre)` })
+    return { skipped: `fora_do_horario_comercial (${horaAcre(agora)}h Acre)` }
   }
 
   const supabase = createServerAdminClient()
@@ -204,7 +211,7 @@ export async function GET(req: NextRequest) {
     .eq('id', 1)
     .maybeSingle<{ followup_ativo: boolean }>()
   if (!cfgFollowup?.followup_ativo) {
-    return NextResponse.json({ skipped: 'followup_desligado' })
+    return { skipped: 'followup_desligado' }
   }
 
   const { data: leadsRaw, error } = await supabase
@@ -237,7 +244,7 @@ export async function GET(req: NextRequest) {
   if (error) {
     console.error('Erro ao buscar leads para follow-up:', error)
     await registrarAlerta(supabase, 'cron/followup', error.message)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return { error: error.message }
   }
 
   const resultados: Resultado[] = []
@@ -583,12 +590,12 @@ export async function GET(req: NextRequest) {
     await registrarAlerta(supabase, 'cron/followup', e instanceof Error ? e.message : 'perdidos_por_silencio')
   }
 
-  return NextResponse.json({
+  return {
     ok: true,
     hora_acre: horaAcre(agora),
     processados: resultados.length,
     enviados: resultados.filter((r) => r.enviado).length,
     perdidos_por_silencio: perdidosPorSilencio,
     resultados,
-  })
+  }
 }

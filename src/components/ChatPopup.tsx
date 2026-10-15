@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import type { Lead, Mensagem } from '@/lib/types'
-import { X, Send, Loader2, Bot } from 'lucide-react'
+import { X, Send, Loader2, Bot, Sparkles } from 'lucide-react'
 import { MidiaMensagem } from '@/components/MidiaMensagem'
+import { MensagemStatus } from '@/components/MensagemStatus'
 
 // Rótulo do separador de data (Hoje / Ontem / DD/MM/AAAA)
 function labelData(iso: string): string {
@@ -17,37 +18,77 @@ function labelData(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
+// Junta mensagens deduplicando por id e removendo os "temp-" já confirmados.
+function mergeMsgs(prev: Mensagem[], incoming: Mensagem[]): Mensagem[] {
+  const map = new Map<string, Mensagem>()
+  for (const m of [...prev, ...incoming]) map.set(m.id, m)
+  const arr = Array.from(map.values())
+  const reais = arr.filter((m) => !String(m.id).startsWith('temp-'))
+  return arr
+    .filter((m) => !String(m.id).startsWith('temp-') || !reais.some((r) => r.direcao === m.direcao && r.conteudo === m.conteudo))
+    .sort((a, b) => (a.criado_em < b.criado_em ? -1 : 1))
+}
+
 export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const supabase = createClient()
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [iaAtiva, setIaAtiva] = useState(lead.ia_ativa)
+  const [instrucao, setInstrucao] = useState('')
+  const [showInstruir, setShowInstruir] = useState(false)
+  const [gerando, setGerando] = useState(false)
   const msgsRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    let ativo = true
-    supabase
+  async function loadMensagens() {
+    const { data } = await supabase
       .from('mensagens')
       .select('*')
       .eq('lead_id', lead.id)
       .order('criado_em')
-      .then(({ data }) => {
-        if (ativo && data) setMensagens(data as unknown as Mensagem[])
-      })
+    if (data) setMensagens((prev) => mergeMsgs(prev, data as unknown as Mensagem[]))
+  }
+
+  // Marca as recebidas como lidas (apaga o badge "nova" no funil).
+  async function marcarLidas() {
+    await supabase
+      .from('mensagens')
+      .update({ lida: true })
+      .eq('lead_id', lead.id)
+      .eq('direcao', 'in')
+      .eq('lida', false)
+  }
+
+  useEffect(() => {
+    setMensagens([]) // limpa a conversa anterior antes de carregar a nova
+    loadMensagens()
+    marcarLidas()
 
     const ch = supabase
       .channel(`popup-msg-${lead.id}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `lead_id=eq.${lead.id}` },
-        (payload) => setMensagens((prev) => [...prev, payload.new as Mensagem]),
+        { event: 'INSERT', schema: 'crm', table: 'mensagens', filter: `lead_id=eq.${lead.id}` },
+        (payload) => {
+          const nova = payload.new as Mensagem
+          setMensagens((prev) => mergeMsgs(prev, [nova]))
+          if (nova.direcao === 'in') marcarLidas()
+        },
+      )
+      // Transição de status (enviado → entregue → lido → falhou) é um UPDATE.
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'crm', table: 'mensagens', filter: `lead_id=eq.${lead.id}` },
+        (payload) => setMensagens((prev) => mergeMsgs(prev, [payload.new as Mensagem])),
       )
       .subscribe()
 
+    // Fallback se o Realtime falhar
+    const poll = setInterval(() => { loadMensagens() }, 5000)
+
     return () => {
-      ativo = false
       supabase.removeChannel(ch)
+      clearInterval(poll)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id])
@@ -61,11 +102,46 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
     await supabase.from('leads').update({ ia_ativa: on }).eq('id', lead.id)
   }
 
+  // Pede à Sara que redija a próxima mensagem seguindo a INSTRUÇÃO do atendente
+  // (ou só pelo contexto, se vazia). Não envia: cai no rascunho para revisão.
+  async function pedirSara() {
+    if (gerando) return
+    setGerando(true)
+    try {
+      const res = await fetch('/api/sara/sugerir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: lead.id, instrucao: instrucao.trim() || undefined }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.resposta) {
+        alert('A Sara não gerou o rascunho: ' + (data.error || res.statusText))
+      } else {
+        setDraft(data.resposta)
+        setShowInstruir(false)
+      }
+    } catch (e) {
+      alert('Falha ao chamar a Sara: ' + (e instanceof Error ? e.message : 'erro'))
+    } finally {
+      setGerando(false)
+    }
+  }
+
   async function enviar() {
     if (!draft.trim() || sending) return
     setSending(true)
     const texto = draft
     setDraft('')
+
+    const tempId = `temp-${Date.now()}`
+    const otimista: Mensagem = {
+      id: tempId, lead_id: lead.id, direcao: 'out_humano', conteudo: texto,
+      tipo_midia: 'texto', url_midia: null, enviado_por: null, whatsapp_message_id: null,
+      criado_em: new Date().toISOString(),
+      status: 'enviado', erro_envio: null, lida: false, agente: null, agente_origem: null,
+    }
+    setMensagens((prev) => mergeMsgs(prev, [otimista]))
+
     const res = await fetch('/api/mensagens/enviar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -74,6 +150,8 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       alert('Erro ao enviar: ' + (err.error || res.statusText))
+      setMensagens((prev) => prev.filter((m) => m.id !== tempId))
+      setDraft(texto)
     }
     setSending(false)
   }
@@ -128,10 +206,13 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
                     <div className="mb-1"><MidiaMensagem tipo={m.tipo_midia} path={m.url_midia} /></div>
                   )}
                   {m.conteudo}
-                  <div className={`mt-1 text-[10px] ${isIn ? 'text-slate-400' : isIA ? 'text-green-700/70' : 'text-blue-700/70'}`}>
-                    {isIA ? 'Sara IA' : isIn ? 'Família' : 'Equipe'} ·{' '}
-                    {new Date(m.criado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
-                    {new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                  <div className={`mt-1 flex items-center gap-1 text-[10px] ${isIn ? 'text-slate-400' : isIA ? 'text-green-700/70' : 'text-blue-700/70'}`}>
+                    <span>
+                      {isIA ? 'Sara IA' : isIn ? 'Família' : 'Equipe'} ·{' '}
+                      {new Date(m.criado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
+                      {new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    {!isIn && <MensagemStatus status={m.status} erro_envio={m.erro_envio} />}
                   </div>
                 </div>
               </div>
@@ -139,6 +220,45 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
           )
         })}
         {mensagens.length === 0 && <div className="py-8 text-center text-xs text-slate-400">Sem mensagens ainda</div>}
+      </div>
+
+      <div className="border-t border-slate-200 px-2 pt-2">
+        {!showInstruir ? (
+          <button
+            onClick={() => setShowInstruir(true)}
+            className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-green-700"
+          >
+            <Sparkles className="h-3 w-3" /> Pedir à Sara para redigir
+          </button>
+        ) : (
+          <div className="mb-2 rounded-lg border border-green-200 bg-green-50/70 p-2">
+            <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-green-800">
+              <Sparkles className="h-3 w-3" /> Instrução para a Sara
+              <button
+                onClick={() => setShowInstruir(false)}
+                className="ml-auto text-green-700/60 hover:text-green-900"
+                aria-label="Fechar instrução"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            <textarea
+              value={instrucao}
+              onChange={(e) => setInstrucao(e.target.value)}
+              placeholder="Ex.: ofereça terça 15h · responda a objeção de preço ancorando no valor base. (vazio = continuar pelo contexto)"
+              rows={2}
+              className="w-full resize-none rounded border border-green-200 px-2 py-1 text-[12px] outline-none focus:border-green-500"
+            />
+            <button
+              onClick={pedirSara}
+              disabled={gerando}
+              className="mt-1 flex w-full items-center justify-center gap-1 rounded bg-green-600 px-2 py-1 text-[12px] font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            >
+              {gerando ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              {gerando ? 'Gerando…' : 'Gerar rascunho'}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 border-t border-slate-200 p-2">
