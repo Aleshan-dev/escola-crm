@@ -20,22 +20,30 @@ export default function SalomaoConfigPage() {
   const [modelo, setModelo] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [canaisPagamento, setCanaisPagamento] = useState('')
+  const [credenciais, setCredenciais] = useState<{ id: string; provedor: string; nome: string | null; ultimos4: string | null }[]>([])
+  const [credId, setCredId] = useState('')
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('config_ia').select('*').eq('id', 1).single()
+    const [{ data }, credsResp] = await Promise.all([
+      supabase.from('config_ia').select('*').eq('id', 1).single(),
+      fetch('/api/credenciais').then((r) => r.json()).catch(() => ({ credenciais: [] })),
+    ])
     const c = data as {
       salomao_ativo?: boolean
       salomao_modelo?: string
       salomao_system_prompt?: string
       salomao_canais_pagamento?: string
+      salomao_credencial_id?: string | null
     } | null
     if (c) {
       setAtivo(!!c.salomao_ativo)
       setModelo(c.salomao_modelo || '')
       setSystemPrompt(c.salomao_system_prompt || '')
       setCanaisPagamento(c.salomao_canais_pagamento || '')
+      setCredId(c.salomao_credencial_id || '')
     }
+    setCredenciais(credsResp?.credenciais || [])
     setLoading(false)
   }
 
@@ -54,6 +62,7 @@ export default function SalomaoConfigPage() {
         salomao_modelo: modelo.trim() || null,
         salomao_system_prompt: systemPrompt.trim() || null,
         salomao_canais_pagamento: canaisPagamento.trim() || null,
+        salomao_credencial_id: credId || null,
         atualizado_em: new Date().toISOString(),
       })
       .eq('id', 1)
@@ -95,6 +104,17 @@ export default function SalomaoConfigPage() {
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-500">Modelo</span>
                 <input value={modelo} onChange={(e) => setModelo(e.target.value)} className={inputCls} placeholder="gpt-4o (vazio = usa o modelo da Sara)" />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Credencial de IA</span>
+                <select value={credId} onChange={(e) => setCredId(e.target.value)} className={inputCls}>
+                  <option value="">Padrão (chave do ambiente)</option>
+                  {credenciais.map((c) => (
+                    <option key={c.id} value={c.id}>{(c.nome || c.provedor) + ' · …' + (c.ultimos4 || '')}</option>
+                  ))}
+                </select>
+                <Link href="/configuracoes/credenciais" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Gerenciar credenciais</Link>
               </label>
 
               <label className="block">

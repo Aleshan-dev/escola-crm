@@ -75,6 +75,22 @@ const JUNK_PHONES = new Set(['+68981050916', '+5568996015656'])
 // "Capturados" = 1ª coluna do funil padrão (captação) do crm@zdarzt.
 const FALLBACK_COLUNA = '18f1f407-cbe1-4493-8e38-50fc71e920fa'
 
+// Mapeia o `type` das atividades do Deskcomm para o enum `eventos_timeline.tipo` do
+// legado. O que NÃO está aqui é telemetria do motor (lead_cooled, reactivation_*,
+// ai_turn, send_vetoed, handoff_*, demand_*, next_action_*…) — sem sentido no legado,
+// é PULADO em vez de inserido com rótulo errado.
+const EVENTO_TIPO_MAP: Record<string, string> = {
+  lead_created: 'criado', criado: 'criado',
+  stage_changed: 'movido_coluna', movido_coluna: 'movido_coluna',
+  anotacao: 'anotacao', status_ia: 'status_ia', lead_edited: 'status_ia',
+  appointment_scheduled: 'visita_agendada', visita_agendada: 'visita_agendada',
+  followup_scheduled: 'visita_agendada', appointment_completed: 'visita_realizada',
+}
+// status do Deskcomm -> enum tarefas.status do legado.
+const VISITA_STATUS_MAP: Record<string, string> = {
+  confirmed: 'agendada', completed: 'realizada', no_show: 'ausente', cancelled: 'cancelada',
+}
+
 type Row = Record<string, any>
 
 async function fetchAll(client: SupabaseClient, table: string, cols: string): Promise<Row[]> {
@@ -154,6 +170,9 @@ async function main() {
     criancas_novas: 0, criancas_dup: 0, criancas_erro: 0,
     leads_novos: 0, leads_pulados_familia_ja_tem: 0, leads_sem_coluna_fallback: 0, leads_erro: 0,
     msgs_novas: 0, msgs_ja_existem: 0, msgs_sem_extid: 0, msgs_sem_lead: 0, msgs_erro: 0,
+    anotacoes_novas: 0, anotacoes_ja_existem: 0, anotacoes_sem_lead: 0, anotacoes_erro: 0,
+    eventos_novos: 0, eventos_ja_existem: 0, eventos_sem_lead: 0, eventos_ignorados_telemetria: 0, eventos_erro: 0,
+    visitas_novas: 0, visitas_ja_existem: 0, visitas_sem_lead: 0, visitas_erro: 0,
   }
 
   const contactToFamilia = new Map<string, string>() // src contact id -> dst familia id
@@ -294,6 +313,68 @@ async function main() {
       const { error } = await dst.from('mensagens').insert(lote)
       if (error) { console.error(`mensagens insert (lote ${i}) falhou: ${error.message}`); stats.msgs_erro += lote.length }
     }
+  }
+
+  // ---- 5/6/7) SECUNDARIOS: anotacoes, timeline, visitas (via contato -> lead) ----
+  const leadDoContato = (srcContactId: string | null): string | null => {
+    if (!srcContactId) return null
+    const fam = contactToFamilia.get(srcContactId)
+    if (!fam || String(fam).startsWith('DRY:')) return null
+    return famToLead2.get(fam) ?? null
+  }
+  const epoch = (v: unknown): number => { const d = new Date(String(v)); return isNaN(d.getTime()) ? 0 : d.getTime() }
+
+  // 5) ANOTACOES (lead_notes -> anotacoes)
+  const notes = await fetchAll(src, 'lead_notes', 'id,contact_id,headline,body,created_at')
+  const dstNotas = new Set((await fetchAll(dst, 'anotacoes', 'lead_id,criado_em')).map((r) => `${r.lead_id}|${epoch(r.criado_em)}`))
+  const notasInserir: Row[] = []
+  for (const nt of notes) {
+    const lead = leadDoContato(nt.contact_id); if (!lead) { stats.anotacoes_sem_lead++; continue }
+    if (dstNotas.has(`${lead}|${epoch(nt.created_at)}`)) { stats.anotacoes_ja_existem++; continue }
+    const conteudo = (nt.headline ? `${nt.headline}\n${nt.body ?? ''}` : (nt.body ?? '')).trim()
+    if (!conteudo) continue
+    notasInserir.push({ lead_id: lead, conteudo, criado_em: nt.created_at }); stats.anotacoes_novas++
+  }
+  if (APPLY) for (let i = 0; i < notasInserir.length; i += 500) {
+    const { error } = await dst.from('anotacoes').insert(notasInserir.slice(i, i + 500))
+    if (error) { console.error('anotacoes falhou:', error.message); stats.anotacoes_erro += Math.min(500, notasInserir.length - i) }
+  }
+
+  // 6) TIMELINE (crm_lead_activities -> eventos_timeline)
+  const acts = await fetchAll(src, 'crm_lead_activities', 'id,contact_id,type,payload,metadata,performed_at,created_at')
+  const dstEv = new Set((await fetchAll(dst, 'eventos_timeline', 'lead_id,criado_em,tipo')).map((r) => `${r.lead_id}|${epoch(r.criado_em)}|${r.tipo}`))
+  const eventosInserir: Row[] = []
+  for (const a of acts) {
+    const lead = leadDoContato(a.contact_id); if (!lead) { stats.eventos_sem_lead++; continue }
+    const tipo = EVENTO_TIPO_MAP[String(a.type)]
+    if (!tipo) { stats.eventos_ignorados_telemetria++; continue }
+    const criado = a.performed_at ?? a.created_at
+    if (dstEv.has(`${lead}|${epoch(criado)}|${tipo}`)) { stats.eventos_ja_existem++; continue }
+    const p = a.payload
+    const descricao = (p && typeof p === 'object')
+      ? String(p.descricao ?? p.title ?? p.message ?? JSON.stringify(p)).slice(0, 500)
+      : String(p ?? a.type ?? '')
+    eventosInserir.push({ lead_id: lead, tipo, descricao, metadados: a.metadata ?? a.payload ?? null, criado_em: criado }); stats.eventos_novos++
+  }
+  if (APPLY) for (let i = 0; i < eventosInserir.length; i += 500) {
+    const { error } = await dst.from('eventos_timeline').insert(eventosInserir.slice(i, i + 500))
+    if (error) { console.error('eventos_timeline falhou:', error.message); stats.eventos_erro += Math.min(500, eventosInserir.length - i) }
+  }
+
+  // 7) VISITAS (calendar_appointments -> tarefas). Carrega google_event_id p/ nao
+  // recriar no Google (assume mesma conta/calendario — confirmar).
+  const appts = await fetchAll(src, 'calendar_appointments', 'id,title,starts_at,status,contact_id,google_event_id')
+  const dstVisitaGEvt = new Set((await fetchAll(dst, 'tarefas', 'google_event_id')).map((r) => r.google_event_id).filter(Boolean))
+  const tarefasInserir: Row[] = []
+  for (const ap of appts) {
+    const lead = leadDoContato(ap.contact_id); if (!lead) { stats.visitas_sem_lead++; continue }
+    if (ap.google_event_id && dstVisitaGEvt.has(ap.google_event_id)) { stats.visitas_ja_existem++; continue }
+    const concluida = ['completed', 'no_show', 'cancelled'].includes(String(ap.status))
+    tarefasInserir.push({ lead_id: lead, titulo: ap.title ?? 'Visita', tipo: 'visita', data_hora: ap.starts_at, concluida, status: VISITA_STATUS_MAP[String(ap.status)] ?? 'agendada', google_event_id: ap.google_event_id ?? null }); stats.visitas_novas++
+  }
+  if (APPLY) for (let i = 0; i < tarefasInserir.length; i += 500) {
+    const { error } = await dst.from('tarefas').insert(tarefasInserir.slice(i, i + 500))
+    if (error) { console.error('tarefas falhou:', error.message); stats.visitas_erro += Math.min(500, tarefasInserir.length - i) }
   }
 
   console.log('RESUMO:')

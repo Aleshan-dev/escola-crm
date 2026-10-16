@@ -7,7 +7,7 @@ import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
   MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight, DollarSign, Bell,
-  Wallet, ClipboardCheck,
+  Wallet, ClipboardCheck, KeyRound,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -59,6 +59,7 @@ const secoes: { nome: string; itens: Item[] }[] = [
   {
     nome: 'Integrações',
     itens: [
+      { titulo: 'Credenciais de IA', descricao: 'Chaves dos provedores (OpenAI, OpenRouter, DeepSeek) e qual agente usa cada uma.', href: '/configuracoes/credenciais', icon: KeyRound },
       { titulo: 'Google Agenda', descricao: 'Sincronize visitas com o Google Calendar.', href: '/configuracoes/integracoes', icon: CalendarCheck },
       { titulo: 'WhatsApp Disparos (WAHA)', descricao: 'Conexão do canal de disparos (Salomão/convites). Chip SEPARADO do atendimento.', href: '/configuracoes/waha', icon: MessageSquareText },
       { titulo: 'WhatsApp (Evolution)', descricao: 'Canal de disparos legado (rollback do WAHA).', href: '/configuracoes/whatsapp', icon: MessageSquareText },

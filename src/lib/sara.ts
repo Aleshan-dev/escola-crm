@@ -1,15 +1,9 @@
-import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
 import { getOcupacaoDireta } from '@/lib/sgei'
 import { formatarIdade } from '@/lib/idade'
 import { DIRETRIZES_MAESTRO } from '@/lib/maestro/diretrizes'
-
-let _openai: OpenAI | null = null
-function getOpenAI(): OpenAI {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  return _openai
-}
+import { chamarModeloIA } from '@/lib/ia-credenciais'
 
 export type SaraColuna = {
   id: string
@@ -521,16 +515,9 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
     })
   }
 
-  const modelo = config?.modelo?.startsWith('gpt') ? config.modelo : 'gpt-4o'
+  const modelo = config?.modelo?.trim() || 'gpt-4o'
 
-  const response = await getOpenAI().chat.completions.create({
-    model: modelo,
-    max_tokens: 700,
-    response_format: { type: 'json_object' },
-    messages,
-  })
-
-  const raw = response.choices[0]?.message?.content || '{}'
+  const raw = (await chamarModeloIA('sara', { messages, model: modelo, maxTokens: 700, jsonMode: true })) || '{}'
 
   try {
     const parsed = JSON.parse(raw) as Partial<SaraResposta>

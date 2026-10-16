@@ -1,5 +1,5 @@
-import OpenAI from 'openai'
 import { createServerAdminClient } from '@/lib/supabase-server'
+import { chamarModeloIA } from '@/lib/ia-credenciais'
 import { arcaIdentificar, arcaFinanceiro, arcaRecado, arcaPix, type ArcaFinanceiro, type ArcaPixItem } from '@/lib/arca'
 import { notificarGestor } from '@/lib/notificacoes'
 import { registrarAlerta } from '@/lib/alertas'
@@ -22,12 +22,6 @@ type SupaAdmin = ReturnType<typeof createServerAdminClient>
 type EnviarTexto = (telefone: string, texto: string) => Promise<string | null>
 
 const MAX_TENTATIVAS_CPF = 2
-
-let _openai: OpenAI | null = null
-function getOpenAI(): OpenAI {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  return _openai
-}
 
 type SalomaoLLM = {
   resposta: string
@@ -181,17 +175,8 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
     })),
   ]
 
-  const modelo = config?.salomao_modelo?.startsWith('gpt')
-    ? config.salomao_modelo
-    : config?.modelo?.startsWith('gpt') ? config.modelo : 'gpt-4o'
-  const response = await getOpenAI().chat.completions.create({
-    model: modelo,
-    max_tokens: 500,
-    response_format: { type: 'json_object' },
-    messages,
-  })
-
-  const raw = response.choices[0]?.message?.content || '{}'
+  const modelo = config?.salomao_modelo?.trim() || config?.modelo?.trim() || 'gpt-4o'
+  const raw = (await chamarModeloIA('salomao', { messages, model: modelo, maxTokens: 500, jsonMode: true })) || '{}'
   try {
     const p = JSON.parse(raw) as Partial<SalomaoLLM>
     const cpf = typeof p.cpf_prefixo === 'string' ? p.cpf_prefixo.replace(/\D/g, '').slice(0, 3) : null

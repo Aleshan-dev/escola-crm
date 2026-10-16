@@ -26,6 +26,8 @@ export default function SaraConfigPage() {
   const [modelo, setModelo] = useState('')
   const [informaPreco, setInformaPreco] = useState(false)
   const [systemPrompt, setSystemPrompt] = useState('')
+  const [credenciais, setCredenciais] = useState<{ id: string; provedor: string; nome: string | null; ultimos4: string | null }[]>([])
+  const [saraCredId, setSaraCredId] = useState('')
 
   const [kb, setKb] = useState<Conhecimento[]>([])
   const [novaCat, setNovaCat] = useState('faq')
@@ -34,18 +36,21 @@ export default function SaraConfigPage() {
 
   async function load() {
     setLoading(true)
-    const [cfg, base] = await Promise.all([
+    const [cfg, base, credsResp] = await Promise.all([
       supabase.from('config_ia').select('*').eq('id', 1).single(),
       supabase.from('base_conhecimento').select('*').order('categoria'),
+      fetch('/api/credenciais').then((r) => r.json()).catch(() => ({ credenciais: [] })),
     ])
-    const c = cfg.data as { nome_agente?: string; modelo?: string; informa_preco?: boolean; system_prompt?: string } | null
+    const c = cfg.data as { nome_agente?: string; modelo?: string; informa_preco?: boolean; system_prompt?: string; sara_credencial_id?: string | null } | null
     if (c) {
       setNomeAgente(c.nome_agente || '')
       setModelo(c.modelo || '')
       setInformaPreco(!!c.informa_preco)
       setSystemPrompt(c.system_prompt || '')
+      setSaraCredId(c.sara_credencial_id || '')
     }
     if (base.data) setKb(base.data as unknown as Conhecimento[])
+    setCredenciais(credsResp?.credenciais || [])
     setLoading(false)
   }
 
@@ -64,6 +69,7 @@ export default function SaraConfigPage() {
         modelo: modelo.trim(),
         informa_preco: informaPreco,
         system_prompt: systemPrompt,
+        sara_credencial_id: saraCredId || null,
         atualizado_em: new Date().toISOString(),
       })
       .eq('id', 1)
@@ -125,6 +131,16 @@ export default function SaraConfigPage() {
                   <input value={modelo} onChange={(e) => setModelo(e.target.value)} className={inputCls} placeholder="gpt-4o" />
                 </label>
               </div>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Credencial de IA</span>
+                <select value={saraCredId} onChange={(e) => setSaraCredId(e.target.value)} className={inputCls}>
+                  <option value="">Padrão (chave do ambiente)</option>
+                  {credenciais.map((c) => (
+                    <option key={c.id} value={c.id}>{(c.nome || c.provedor) + ' · …' + (c.ultimos4 || '')}</option>
+                  ))}
+                </select>
+                <Link href="/configuracoes/credenciais" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Gerenciar credenciais</Link>
+              </label>
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={informaPreco} onChange={(e) => setInformaPreco(e.target.checked)} />
                 Informar preço no WhatsApp
