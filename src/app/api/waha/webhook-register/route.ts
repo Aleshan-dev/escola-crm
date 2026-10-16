@@ -4,12 +4,18 @@ import { getWahaConfig } from '@/lib/waha'
 // Registra (ou confere) o webhook de ENTRADA na sessão do WAHA, para que as
 // mensagens recebidas cheguem em /api/webhook/waha. Protegida pela sessão (middleware).
 //
-// Evento: apenas 'message.any' — cobre recebidas E enviadas (fromMe) num único
-// evento; assinar 'message' junto entregaria as recebidas em dobro.
+// Eventos:
+// - 'message.any' — cobre recebidas E enviadas (fromMe) num único evento; assinar
+//   'message' junto entregaria as recebidas em dobro.
+// - 'message.ack' — recibos de entrega das mensagens que ENVIAMOS (entregue ✓✓ /
+//   lido ✓✓ azul), tratados em /api/webhook/waha e gravados em mensagens.status.
+//
+// ⚠️ Ao MUDAR esta lista, é preciso RE-REGISTRAR o webhook (POST aqui, ou o botão
+//    na tela Configurações → WhatsApp Disparos) para o WAHA passar a enviar o novo evento.
 
 export const dynamic = 'force-dynamic'
 
-const EVENTOS = ['message.any']
+const EVENTOS = ['message.any', 'message.ack']
 
 function alvoWebhook(): string {
   const base = (process.env.NEXT_PUBLIC_APP_URL || 'https://escola-crm.vercel.app').replace(/\/+$/, '')

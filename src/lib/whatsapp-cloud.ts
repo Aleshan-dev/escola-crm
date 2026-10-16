@@ -115,18 +115,18 @@ export async function enviarTextoWhatsApp(
     return sent?.key?.id || null
   }
 
-  // Canal Cloud oficial: conta específica (banco) ou credenciais do env — mesmo
-  // fallback do webhook (enviarTextoCloudConta → enviarTextoCloud).
+  // Canal Cloud oficial: SOMENTE quando há conta Cloud ATIVA no banco.
+  // O fallback por env (WHATSAPP_PHONE_NUMBER_ID/TOKEN) foi removido de propósito:
+  // um número Cloud encostado com token expirado no env reintroduzia o canal morto
+  // e derrubava a saída com erro 100/33 da Meta ("Object ... does not exist"), em
+  // vez de cair no Evolution. Sem conta ativa, a saída vai pelo Evolution (canal ativo).
   const conta = await resolverConta(phoneId)
-  const phoneNumberId = conta?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID
-  const token = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN
-
-  if (phoneNumberId && token) {
-    const sent = await enviarTextoCloudConta(phoneNumberId, token, to, texto)
+  if (conta?.phone_number_id && conta?.token) {
+    const sent = await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
     return sent?.messages?.[0]?.id || null
   }
 
-  // Sem canal Cloud: o número está conectado via Evolution -> envia pelo Evolution.
+  // Sem conta Cloud ativa: o número está conectado via Evolution -> envia pelo Evolution.
   const { evolutionSendText } = await import('@/lib/evolution')
   const sent = await evolutionSendText(to, texto)
   return sent?.key?.id || null
@@ -220,15 +220,12 @@ export async function enviarMidiaWhatsApp(
     return { wid: sent?.key?.id || null, tipo }
   }
 
-  // Canal Cloud oficial: conta específica (banco) ou credenciais do env — mesma
-  // resolução do texto (resolverConta → fallback enviarTextoCloud do webhook).
+  // Canal Cloud oficial: SOMENTE quando há conta Cloud ATIVA no banco (mesma
+  // regra do texto). Sem fallback de env — ver enviarTextoWhatsApp acima.
   const conta = await resolverConta(phoneId)
-  const phoneNumberId = conta?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID
-  const token = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN
-
-  if (phoneNumberId && token) {
-    const mediaId = await cloudUploadMedia(phoneNumberId, token, midia.base64, midia.mimetype, midia.filename)
-    const wid = await cloudSendMedia(phoneNumberId, token, to, kind, mediaId, midia.filename, midia.caption)
+  if (conta?.phone_number_id && conta?.token) {
+    const mediaId = await cloudUploadMedia(conta.phone_number_id, conta.token, midia.base64, midia.mimetype, midia.filename)
+    const wid = await cloudSendMedia(conta.phone_number_id, conta.token, to, kind, mediaId, midia.filename, midia.caption)
     return { wid, tipo }
   }
 

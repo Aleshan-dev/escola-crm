@@ -2,7 +2,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
 import { getOcupacaoDireta } from '@/lib/sgei'
 import { formatarIdade } from '@/lib/idade'
-import { DIRETRIZES_MAESTRO } from '@/lib/maestro/diretrizes'
+import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
 import { chamarModeloIA } from '@/lib/ia-credenciais'
 
 export type SaraColuna = {
@@ -390,7 +390,7 @@ REGRA ANTI-ALUCINAÇÃO — CRÍTICA
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
 - O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
 
-${DIRETRIZES_MAESTRO}
+${resolverDiretrizes(config)}
 ${blocoConfig}
 ${blocoVagas}
 

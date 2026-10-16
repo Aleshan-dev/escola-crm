@@ -5,7 +5,7 @@ import { notificarGestor } from '@/lib/notificacoes'
 import { registrarAlerta } from '@/lib/alertas'
 import { sleep } from '@/lib/pacing'
 import { normalizarCelularBR } from '@/lib/sgei'
-import { DIRETRIZES_MAESTRO } from '@/lib/maestro/diretrizes'
+import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
 
 // Salomão — atendente virtual de PAIS JÁ MATRICULADOS (irmão da Sara).
 // A Sara atende leads; o Salomão atende famílias matriculadas, sob trava de
@@ -96,7 +96,7 @@ async function gerarRespostaSalomaoLLM(
 ): Promise<SalomaoLLM> {
   const { data: config } = await supabase
     .from('config_ia')
-    .select('modelo, salomao_modelo, salomao_system_prompt')
+    .select('modelo, salomao_modelo, salomao_system_prompt, maestro_diretrizes')
     .eq('id', 1)
     .single()
 
@@ -154,7 +154,7 @@ Se o responsável pedir algo que você não resolve (falar com coordenação, re
 TRANSBORDO:
 Marque transbordo=true (com motivo_transbordo) se o responsável pedir insistentemente um atendente humano, fizer reclamação grave, ou demonstrar irritação com o atendimento automático.
 
-${DIRETRIZES_MAESTRO}
+${resolverDiretrizes(config)}
 
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON):
 {

@@ -54,11 +54,37 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const event: string = body?.event || ''
+    const p = body?.payload || {}
+
+    // ── Recibos de entrega (ack): entregue (✓✓) / lido (✓✓ azul) ──────────────
+    // O WAHA emite 'message.ack' para as mensagens que ENVIAMOS. Níveis:
+    //   -1 ERROR · 0 PENDING · 1 SERVER(enviado) · 2 DEVICE(entregue) · 3 READ(lido) · 4 PLAYED
+    // Casa pelo id (_serialized) gravado em whatsapp_message_id e NUNCA rebaixa um
+    // status já mais avançado — acks podem chegar fora de ordem.
+    if (event === 'message.ack') {
+      const wid = widDe(p?.id)
+      const ack = Number(p?.ack)
+      let novo: 'entregue' | 'lido' | 'falhou' | null = null
+      let de: string[] = []
+      if (ack === -1) { novo = 'falhou'; de = ['enviado'] }
+      else if (ack >= 3) { novo = 'lido'; de = ['enviado', 'entregue'] }
+      else if (ack === 2) { novo = 'entregue'; de = ['enviado'] }
+      if (!wid || !novo) {
+        return NextResponse.json({ ok: true, ack, ignored: !wid ? 'ack sem id' : 'nivel sem mudanca' })
+      }
+      const upd: Record<string, unknown> = { status: novo }
+      if (novo === 'falhou') upd.erro_envio = 'Falha na entrega (WAHA)'
+      await supabase
+        .from('mensagens')
+        .update(upd)
+        .eq('whatsapp_message_id', wid)
+        .or(`status.is.null,status.in.(${de.join(',')})`)
+      return NextResponse.json({ ok: true, ack, status: novo })
+    }
+
     if (event !== 'message' && event !== 'message.any') {
       return NextResponse.json({ ignored: event })
     }
-
-    const p = body?.payload || {}
 
     const from: string = p?.from || ''
     // Ignora grupos, status/stories e newsletters.

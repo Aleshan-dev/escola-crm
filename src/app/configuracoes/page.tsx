@@ -7,13 +7,19 @@ import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, Filter, CalendarCheck, XCircle, Globe,
   MessageSquareText, FileText, Workflow, Bot, BookOpen, ChevronRight, DollarSign, Bell,
-  Wallet, ClipboardCheck, KeyRound,
+  Wallet, ClipboardCheck, KeyRound, ShieldCheck,
   type LucideIcon,
 } from 'lucide-react'
 
 type Item = { titulo: string; descricao: string; href?: string; icon: LucideIcon }
 
 const secoes: { nome: string; itens: Item[] }[] = [
+  {
+    nome: 'Maestro Guardião',
+    itens: [
+      { titulo: 'Conversar com o Maestro', descricao: 'Dê instruções em linguagem natural; ele propõe mudanças e você aplica com um clique.', href: '/configuracoes/maestro', icon: ShieldCheck },
+    ],
+  },
   {
     nome: 'Inteligência (Sara)',
     itens: [

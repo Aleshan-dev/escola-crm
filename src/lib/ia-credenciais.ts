@@ -32,8 +32,10 @@ type SupaAdmin = ReturnType<typeof createServerAdminClient>
 interface CredResolvida { provedor: Provedor; apiKey: string; baseUrl?: string }
 export type Mensagem = { role: 'system' | 'user' | 'assistant'; content: string }
 
-async function resolverCredencial(agente: 'sara' | 'salomao', db: SupaAdmin): Promise<CredResolvida> {
-  const col = agente === 'sara' ? 'sara_credencial_id' : 'salomao_credencial_id'
+// O Maestro Guardião (chat de reorganização) não tem credencial própria: reusa a
+// da Sara (fallback env). Evita migração/coluna nova no config_ia vivo.
+async function resolverCredencial(agente: 'sara' | 'salomao' | 'maestro', db: SupaAdmin): Promise<CredResolvida> {
+  const col = agente === 'salomao' ? 'salomao_credencial_id' : 'sara_credencial_id'
   try {
     const { data: cfg } = await db.from('config_ia').select(col).eq('id', 1).maybeSingle()
     const credId = (cfg as Record<string, string | null> | null)?.[col] ?? null
@@ -67,7 +69,7 @@ export function extrairJson(texto: string): string {
  * dá JSON.parse quando jsonMode). Anthropic usa SDK próprio; o resto, o da OpenAI.
  */
 export async function chamarModeloIA(
-  agente: 'sara' | 'salomao',
+  agente: 'sara' | 'salomao' | 'maestro',
   params: { messages: Mensagem[]; model: string; maxTokens: number; jsonMode?: boolean },
   supabase?: SupaAdmin
 ): Promise<string> {
