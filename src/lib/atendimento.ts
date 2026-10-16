@@ -5,6 +5,10 @@ import { labelAcre } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
 import { identificarResponsavel } from '@/lib/sgei'
 import { processarMensagemSalomao } from '@/lib/salomao'
+import { decidirPolitica } from '@/lib/maestro/politica'
+import { detectarOptOut } from '@/lib/maestro/opt-out'
+import { validarResposta } from '@/lib/maestro/validar-resposta'
+import { registrarDecisaoRoteador } from '@/lib/roteador/log'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -300,6 +304,16 @@ export async function processarMensagemRecebida(
     .eq('id', 1)
     .maybeSingle()
   const salomaoAtivo = cfgIA?.salomao_ativo === true
+  // Flags do Maestro via ambiente (sem depender de schema remoto): default seguro.
+  // MAESTRO_ATIVO off => rota idêntica à de sempre. VALIDACAO_SAIDA_MODO em modo
+  // sombra ('log') por padrão: só registra o que vetaria, nunca bloqueia o envio.
+  const maestroAtivo = process.env.MAESTRO_ATIVO === 'true'
+  const validacaoModo: 'off' | 'log' | 'ativo' =
+    process.env.VALIDACAO_SAIDA_MODO === 'off'
+      ? 'off'
+      : process.env.VALIDACAO_SAIDA_MODO === 'ativo'
+        ? 'ativo'
+        : 'log'
   let jaResponsavel = familia.ja_responsavel === true
 
   // Integração SGEI — na primeira vez que um contato aparece, verifica se o
@@ -438,9 +452,59 @@ export async function processarMensagemRecebida(
     if (famFresh) jaResponsavel = famFresh.ja_responsavel === true
   }
 
+  // ── MAESTRO GUARDIÃO ────────────────────────────────────────────────────
+  // Decisão única de política + rota, no lugar das condições espalhadas. Com
+  // MAESTRO_ATIVO off (default), optOut=false ⇒ a rota é idêntica à de sempre:
+  // matriculado→Salomão, novo→Sara, com as guardas de ia_ativa/force_human.
+  const optOut = maestroAtivo && detectarOptOut(conteudo)
+  const decisao = decidirPolitica({
+    optOut,
+    precisaAtendimentoHumano: lead.precisa_atendimento_humano === true,
+    iaAtiva: lead.ia_ativa,
+    jaResponsavel,
+    salomaoAtivo,
+  })
+  if (maestroAtivo) {
+    await registrarDecisaoRoteador(supabase, { leadId: lead.id, canal: origem, decisao })
+  }
+
+  // Opt-out: cliente pediu para parar. Pausa a IA e não responde. A gravação em
+  // familias.opt_out_em é best-effort (a coluna pode ainda não existir no banco;
+  // o PostgREST só devolve erro no resultado, não derruba o fluxo).
+  if (optOut) {
+    await supabase.from('familias').update({ opt_out_em: new Date().toISOString() }).eq('id', familia.id)
+    if (lead.ia_ativa) {
+      await supabase.from('leads').update({ ia_ativa: false }).eq('id', lead.id)
+      await supabase.from('eventos_timeline').insert({
+        lead_id: lead.id,
+        tipo: 'status_ia',
+        descricao: 'IA pausada: lead pediu para parar de receber mensagens (opt-out).',
+      })
+    }
+    return lead.id
+  }
+
+  // Portão de saída do Maestro (modo sombra por padrão): confere o texto do agente
+  // ANTES de enviar. 'log' só registra o que vetaria (não bloqueia); 'off' desliga.
+  // Envolve o envio dos DOIS agentes. O bloqueio real ('ativo') depende da lista de
+  // fatos oficiais do proprietário — até lá, 'ativo' também só registra.
+  const enviarValidado: EnviarTexto =
+    validacaoModo === 'off'
+      ? enviarTexto
+      : async (telefone, texto) => {
+          const r = validarResposta(texto)
+          if (!r.ok) {
+            console.warn(
+              `[maestro/validacao modo=${validacaoModo}] vetaria:`,
+              r.vetos.map((v) => `${v.codigo}:${v.trecho}`).join(' | ')
+            )
+          }
+          return enviarTexto(telefone, texto)
+        }
+
   // Responsável MATRICULADO + Salomão ativo => Salomão atende (nunca a Sara).
   // Respeita ADR-005: pausa manual (ia_ativa=false) e transbordo valem igual.
-  if (jaResponsavel && salomaoAtivo) {
+  if (decisao.rota === 'salomao') {
     if (lead.ia_ativa && !lead.precisa_atendimento_humano) {
       // TRAVA DE RESPOSTA (mutex por lead) — mesma da Sara. O debounce de 15s
       // agrupa a rajada, mas NÃO impede duas execuções concorrentes de passarem
@@ -470,7 +534,7 @@ export async function processarMensagemRecebida(
           telefone,
           nomeFamilia: familia.nome_responsavel || 'Família',
           conteudoIn: conteudoBurst,
-          enviarTexto,
+          enviarTexto: enviarValidado,
         })
       } catch (e) {
         console.error('Salomão falhou:', e)
@@ -485,7 +549,7 @@ export async function processarMensagemRecebida(
   // e ia_ativa=true por qualquer motivo). Com o switch off, quem atende é humano.
   if (jaResponsavel) return lead.id
 
-  if (lead.ia_ativa && !lead.precisa_atendimento_humano) {
+  if (decisao.rota === 'sara') {
     // ── TRAVA DE RESPOSTA (mutex por lead) ────────────────────────────────
     // Só UMA execução responde por vez. Complementa o debounce de 15s: mata a
     // duplicata em rajada e a reentrega de webhook pela Meta. Quem perde, desiste.
@@ -539,7 +603,7 @@ export async function processarMensagemRecebida(
       // Envia em balões curtos (uma mensagem por parágrafo), conforme o manual.
       const baloes = dividirEmBaloes(saraResult.resposta)
       for (let i = 0; i < baloes.length; i++) {
-        const sentId = await enviarTexto(telefone, baloes[i])
+        const sentId = await enviarValidado(telefone, baloes[i])
         await supabase.from('mensagens').insert({
           lead_id: lead.id,
           direcao: 'out_ia',

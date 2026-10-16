@@ -5,6 +5,7 @@ import { notificarGestor } from '@/lib/notificacoes'
 import { registrarAlerta } from '@/lib/alertas'
 import { sleep } from '@/lib/pacing'
 import { normalizarCelularBR } from '@/lib/sgei'
+import { DIRETRIZES_MAESTRO } from '@/lib/maestro/diretrizes'
 
 // Salomão — atendente virtual de PAIS JÁ MATRICULADOS (irmão da Sara).
 // A Sara atende leads; o Salomão atende famílias matriculadas, sob trava de
@@ -158,6 +159,8 @@ Se o responsável pedir algo que você não resolve (falar com coordenação, re
 
 TRANSBORDO:
 Marque transbordo=true (com motivo_transbordo) se o responsável pedir insistentemente um atendente humano, fizer reclamação grave, ou demonstrar irritação com o atendimento automático.
+
+${DIRETRIZES_MAESTRO}
 
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON):
 {

@@ -3,6 +3,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
 import { getOcupacaoDireta } from '@/lib/sgei'
 import { formatarIdade } from '@/lib/idade'
+import { DIRETRIZES_MAESTRO } from '@/lib/maestro/diretrizes'
 
 let _openai: OpenAI | null = null
 function getOpenAI(): OpenAI {
@@ -394,6 +395,8 @@ REGRA ANTI-ALUCINAÇÃO — CRÍTICA
 - Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
 - O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
+
+${DIRETRIZES_MAESTRO}
 ${blocoConfig}
 ${blocoVagas}
 
