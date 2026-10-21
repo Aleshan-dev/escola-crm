@@ -14,6 +14,12 @@ const RENOVAR_SE_FALTAR_MS = 24 * 60 * 60 * 1000 // renova se faltar menos de 1 
 
 type Supabase = ReturnType<typeof createServerAdminClient>
 
+// Evita floodar os alertas quando o Google está desconectado: a disponibilidade é
+// sincronizada a cada mensagem recebida, então sem throttle cada lead geraria uma linha.
+// Em memória por instância serverless — suficiente pra conter o loop quente.
+let _ultimoAlertaToken = 0
+const ALERTA_TOKEN_INTERVALO_MS = 30 * 60 * 1000
+
 type Integ = {
   access_token: string | null
   refresh_token: string | null
@@ -58,8 +64,30 @@ export async function getGoogleToken(
       grant_type: 'refresh_token',
     }),
   })
-  const tok = (await resp.json()) as { access_token?: string; expires_in?: number }
-  if (!tok.access_token) return integ.access_token ? { token: integ.access_token, calendarId } : null
+  const tok = (await resp.json()) as {
+    access_token?: string
+    expires_in?: number
+    error?: string
+    error_description?: string
+  }
+  if (!tok.access_token) {
+    // Renovação falhou (tipicamente 'invalid_grant': refresh_token revogado ou expirado —
+    // em app OAuth no modo "Testing" o refresh_token morre em 7 dias). NÃO devolvemos o
+    // access_token antigo: ele já expirou e só geraria uma cascata de 401 que mascara a
+    // causa real (foi o que deixou a agenda muda por semanas). Alertamos o gestor e
+    // tratamos o Google como desconectado até reconectar.
+    if (Date.now() - _ultimoAlertaToken > ALERTA_TOKEN_INTERVALO_MS) {
+      _ultimoAlertaToken = Date.now()
+      await registrarAlerta(
+        supabase,
+        'google/token',
+        `Renovação do token do Google falhou (${tok.error ?? 'sem access_token'}` +
+          `${tok.error_description ? ': ' + tok.error_description : ''}). A agenda não vai ` +
+          `sincronizar até reconectar em /configuracoes/integracoes.`
+      )
+    }
+    return null
+  }
 
   await supabase
     .from('integracao_google')
@@ -90,9 +118,18 @@ export async function pushTarefaParaGoogle(
       end: { dateTime: fim.toISOString(), timeZone: TZ },
     }),
   })
-  const ev = (await r.json()) as { id?: string; error?: unknown }
+  const ev = (await r.json()) as { id?: string; error?: { code?: number; status?: string } }
   if (!ev.id) {
-    await registrarAlerta(supabase, 'google/push-tarefa', `Falha ao criar evento para tarefa ${tarefa.id}: ${JSON.stringify(ev.error)}`)
+    const authFalhou = ev.error?.code === 401 || ev.error?.status === 'UNAUTHENTICATED'
+    await registrarAlerta(
+      supabase,
+      'google/push-tarefa',
+      authFalhou
+        ? `⚠️ Google recusou a autenticação (401) ao agendar "${tarefa.titulo}" (${tarefa.data_hora}). ` +
+            `A visita ESTÁ salva no CRM, mas NÃO entrou no Google Agenda. ` +
+            `Reconecte o Google em /configuracoes/integracoes para voltar a sincronizar.`
+        : `Falha ao criar evento para tarefa ${tarefa.id}: ${JSON.stringify(ev.error)}`
+    )
     return false
   }
   await supabase.from('tarefas').update({ google_event_id: ev.id }).eq('id', tarefa.id)
