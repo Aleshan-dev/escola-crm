@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase-server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara } from '@/lib/sara'
 import { janelaAberta } from '@/lib/janela'
+import { canalDeSaida } from '@/lib/whatsapp-cloud'
 import {
   triggerPorColuna,
   promptPorTrigger,
@@ -29,13 +30,13 @@ export async function POST(req: NextRequest) {
   const supabase = createServerAdminClient()
   const { data: lead } = await supabase
     .from('leads')
-    .select('id, followup_count, entrou_coluna_em, coluna:colunas(nome, followup_max, followup_intervalo_horas), familia:familias(nome_responsavel, telefone)')
+    .select('id, followup_count, entrou_coluna_em, coluna:colunas(nome, followup_max, followup_intervalo_horas), familia:familias(nome_responsavel, telefone, whatsapp_phone_number_id)')
     .eq('id', lead_id)
     .single()
   if (!lead) return NextResponse.json({ error: 'Lead não encontrado' }, { status: 404 })
 
   const col = lead.coluna as unknown as { nome: string; followup_max: number; followup_intervalo_horas: number | null } | null
-  const fam = lead.familia as unknown as { nome_responsavel: string | null; telefone: string | null } | null
+  const fam = lead.familia as unknown as { nome_responsavel: string | null; telefone: string | null; whatsapp_phone_number_id: string | null } | null
   const tel = fam?.telefone
   if (!col || !tel) {
     return NextResponse.json({ error: 'Lead sem coluna ou telefone' }, { status: 400 })
@@ -88,7 +89,9 @@ export async function POST(req: NextRequest) {
   // Gera a mensagem da Sara e checa a janela — SEM enviar.
   const sara = await gerarRespostaSara(lead_id, undefined, undefined, prompt)
   const texto = sara.resposta ?? ''
-  const aberta = await janelaAberta(supabase, tel)
+  // Janela de 24h só vale se a saída real for a Cloud (mesma regra do cron).
+  const canal = await canalDeSaida(tel, fam?.whatsapp_phone_number_id)
+  const aberta = canal !== 'cloud' || (await janelaAberta(supabase, tel))
 
   return NextResponse.json({
     ok: true,
@@ -100,7 +103,8 @@ export async function POST(req: NextRequest) {
     followup_max: followupMax,
     marco,
     janela_aberta: aberta,
-    decisao: aberta ? 'enviaria_cloud' : 'criaria_alerta_manual',
+    canal,
+    decisao: aberta ? (canal === 'cloud' ? 'enviaria_cloud' : 'enviaria_waha') : 'criaria_alerta_manual',
     mensagem: texto,
     baloes: dividirEmBaloes(texto),
     anotacoes: (anot as { conteudo: string; criado_em: string }[] | null) ?? [],

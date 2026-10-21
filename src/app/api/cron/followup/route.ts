@@ -484,8 +484,11 @@ export async function executarFollowup(agora: number = Date.now()) {
       // roteia a saída pelo mesmo canal do lead). No canal oficial (Cloud) respeitamos
       // a janela: fechada → alerta de envio manual (copiar e colar), SEM retomada
       // automática por template (decisão do gestor, 2026-09-22).
-      const usaWaha = lead.familia?.canal_whatsapp === 'waha'
-      const aberta = usaWaha || (await janelaAberta(supabase, tel))
+      // A janela só existe se a saída REAL for a Cloud (canalDeSaida, mesma regra do
+      // enviarTextoWhatsApp). Desde 21/10/2026 todas as contas Cloud estão inativas e
+      // tudo sai pelo WAHA — família marcada 'cloud' ou sem canal não pode mais virar
+      // "janela fechada" (gerava alerta manual + transbordo à toa).
+      const aberta = canalSaida !== 'cloud' || (await janelaAberta(supabase, tel))
       if (!aberta) {
         if (texto.trim()) {
           await escalarFollowupJanelaFechada(supabase, {
