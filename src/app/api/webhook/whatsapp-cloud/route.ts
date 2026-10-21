@@ -208,6 +208,7 @@ export async function POST(req: NextRequest) {
           origem: 'whatsapp-oficial',
           tag: 'whatsapp-oficial',
           enviarTexto: enviarCloud,
+          canalEnvio: 'cloud',
           canal: ref ? 'meta-ads' : 'organico',
           campanha: ref ? ref.headline || ref.source_id || null : null,
           referral: ref || null,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { canalDeSaida, enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { protegerEnviarTexto } from '@/lib/envio/portao'
 import { ehErroJanela, alertarEnvioManual } from '@/lib/janela'
 import { gerarRespostaSara } from '@/lib/sara'
 import { dividirEmBaloes } from '@/lib/atendimento'
@@ -30,7 +31,16 @@ export async function POST(req: NextRequest) {
 
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
   const fam = lead.familia
-  const enviarTexto = (tel: string, txt: string) => enviarTextoWhatsApp(tel, txt, fam.whatsapp_phone_number_id)
+  // Portão de envio (src/lib/envio): conta no número e respeita opt-out/ritmo.
+  const enviarTexto = protegerEnviarTexto(
+    {
+      origem: 'resposta_ia',
+      canal: await canalDeSaida(fam.telefone, fam.whatsapp_phone_number_id),
+      leadId: lead_id,
+      familiaId: fam.id,
+    },
+    (tel, txt) => enviarTextoWhatsApp(tel, txt, fam.whatsapp_phone_number_id)
+  )
 
   // ── Família matriculada + Salomão ativo → quem responde é o SALOMÃO ──────────
   const { data: cfg } = await supabase.from('config_ia').select('salomao_ativo').eq('id', 1).maybeSingle()

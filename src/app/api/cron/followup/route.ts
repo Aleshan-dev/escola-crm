@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { canalDeSaida, enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarProtegido, preChecarEnvio } from '@/lib/envio/portao'
 import { ehErroJanela, janelaAberta } from '@/lib/janela'
 import { gerarRespostaSara } from '@/lib/sara'
 import {
@@ -443,10 +444,30 @@ export async function executarFollowup(agora: number = Date.now()) {
       if (!devido) continue
     }
 
+    // Portão de envio (src/lib/envio): opt-out e janela ANTES de gastar a geração da
+    // Sara. Opt-out encerra o follow-up do lead; janela só adia (próxima rodada).
+    const canalSaida = await canalDeSaida(tel, lead.familia?.whatsapp_phone_number_id)
+    const ctxEnvio = {
+      origem: 'followup' as const,
+      canal: canalSaida,
+      telefone: tel,
+      leadId: lead.id,
+      familiaId: lead.familia_id,
+    }
+    const pre = await preChecarEnvio(ctxEnvio)
+    if (!pre.ok) {
+      if (pre.motivo === 'opt_out') {
+        await supabase.from('leads').update({ followup_status: 'esgotado' }).eq('id', lead.id)
+      }
+      resultados.push({ lead: lead.id, trigger, enviado: false, skip: `protecao_${pre.motivo}` })
+      continue
+    }
+
     let enviado = false
     let erro: string | null = null
     let texto = ''
     let viaAlerta = false
+    let barradoPeloPortao: string | null = null
     try {
       const saraResult = await gerarRespostaSara(lead.id, undefined, undefined, promptFollowup)
       toques++ // conta a geração no teto por execução (envio real OU alerta manual)
@@ -481,7 +502,16 @@ export async function executarFollowup(agora: number = Date.now()) {
       } else {
         const baloes = dividirEmBaloes(texto)
         for (let i = 0; i < baloes.length; i++) {
-          const wid = await enviarTextoWhatsApp(tel, baloes[i], lead.familia?.whatsapp_phone_number_id)
+          const r = await enviarProtegido(ctxEnvio, baloes[i], () =>
+            enviarTextoWhatsApp(tel, baloes[i], lead.familia?.whatsapp_phone_number_id)
+          )
+          if (r.status !== 'enviado') {
+            // Nada saiu neste balão. No 1º balão o toque inteiro fica para a próxima
+            // rodada (não conta tentativa); depois do 1º, o que saiu já vale como toque.
+            if (i === 0) barradoPeloPortao = `${r.status}_${r.motivo}`
+            break
+          }
+          const wid = r.wid
           await supabase.from('mensagens').insert({
             lead_id: lead.id,
             direcao: 'out_ia',
@@ -490,7 +520,7 @@ export async function executarFollowup(agora: number = Date.now()) {
           })
           if (i < baloes.length - 1) await sleep(900)
         }
-        enviado = true
+        enviado = !barradoPeloPortao
       }
     } catch (e) {
       erro = e instanceof Error ? e.message : 'erro desconhecido'
@@ -511,6 +541,13 @@ export async function executarFollowup(agora: number = Date.now()) {
         erro = null
         triggerLog = triggerLog.endsWith('_alerta') ? triggerLog : `${triggerLog}_alerta`
       }
+    }
+
+    // Barrado pelo portão (teto do dia, intervalo, repetição): não é falha nem
+    // tentativa — não grava followup_log nem avança o timer. O ledger registra.
+    if (barradoPeloPortao) {
+      resultados.push({ lead: lead.id, trigger, enviado: false, skip: `protecao_${barradoPeloPortao}` })
+      continue
     }
 
     await supabase.from('followup_log').insert({

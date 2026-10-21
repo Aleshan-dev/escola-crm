@@ -37,6 +37,16 @@ export async function GET(req: NextRequest) {
 
   const agora = Date.now()
   const supabase = createServerAdminClient()
+
+  // Retenção da proteção de envio: o texto normalizado do ledger só serve ao gate de
+  // repetição (últimas 24h). Depois de 30 dias apaga-se o texto; a contagem fica.
+  await supabase
+    .from('envio_ledger')
+    .update({ texto_norm: null })
+    .lt('criado_em', new Date(agora - 30 * 86_400_000).toISOString())
+    .not('texto_norm', 'is', null)
+    .then(({ error }) => error && console.error('[heartbeat] poda do envio_ledger falhou:', error.message))
+
   try {
     // O follow-up está LIGADO? Se não, o heartbeat fica dormente (não aciona nem alarma).
     const { data: cfg } = await supabase

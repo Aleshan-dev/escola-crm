@@ -102,6 +102,19 @@ async function contatoUsaWaha(to: string): Promise<boolean> {
   }
 }
 
+/**
+ * Canal físico por onde `enviarTextoWhatsApp(to, …, phoneId)` vai sair — mesma
+ * regra de roteamento dele. Usado pelo portão de envio (src/lib/envio) para
+ * contar ritmo e teto no número certo.
+ */
+export async function canalDeSaida(to: string, phoneId?: string | null): Promise<'waha' | 'cloud' | 'evolution'> {
+  if (await contatoUsaWaha(to)) return 'waha'
+  const conta = await resolverConta(phoneId)
+  if (conta?.phone_number_id && conta?.token) return 'cloud'
+  const { canalNaoOficial } = await import('@/lib/evolution')
+  return canalNaoOficial()
+}
+
 export async function enviarTextoWhatsApp(
   to: string,
   texto: string,

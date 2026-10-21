@@ -136,6 +136,7 @@ export async function POST(req: NextRequest) {
           origem: 'whatsapp',
           tag: 'whatsapp',
           enviarTexto: enviarWaha,
+          canalEnvio: 'waha',
           canal: 'organico',
           tipoMidia,
           urlMidia,

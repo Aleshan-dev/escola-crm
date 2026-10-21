@@ -3,7 +3,8 @@ import {
   arcaDisparosPendentes, arcaMarcarEnviado,
   arcaMensagensPendentes, arcaMarcarMensagemEnviada,
 } from '@/lib/arca'
-import { evolutionSendMedia, evolutionSendText } from '@/lib/evolution'
+import { canalNaoOficial, evolutionSendMedia, evolutionSendText } from '@/lib/evolution'
+import { enviarProtegido } from '@/lib/envio/portao'
 import { registrarBoletoNoChat } from '@/lib/boletos'
 import { registrarDisparoNoChat, mediatypeDe } from '@/lib/disparos'
 import {
@@ -30,12 +31,16 @@ import {
 // resultado (marcar_enviado / marcar_mensagem_enviada). Não escrevemos status à
 // mão e não reescrevemos o texto: a mensagem vem PRONTA do Arca.
 //
-// CONCORRÊNCIA: as filas do Arca NÃO têm claim-lock (ao contrário dos convites),
-// então dois drenadores simultâneos poderiam enviar o mesmo item duas vezes. Por
-// isso o cron é o ÚNICO drenador (o gatilho não envia mais) e uma execução
-// termina (≤300s) antes da próxima começar (cron a cada 10 min). Isto é MAIS
-// seguro que o desenho antigo, onde um duplo-clique no botão já disparava dois
-// after() concorrentes.
+// CONCORRÊNCIA: as filas do Arca NÃO têm claim-lock (ao contrário dos convites).
+// Desde 21/10 cada item passa pela trava do lado do CRM (crm.envio_item_claim via
+// envio_item_reivindicar): só quem insere a linha envia; item já enviado nunca sai
+// de novo, mesmo que o Arca ainda o devolva como pendente. Isso cobre duas
+// instâncias DESTE app. Outro sistema drenando a mesma fila (ex.: o deskcomm-staging)
+// não usa esta trava — esse precisa ser desligado lá.
+//
+// PORTÃO DE ENVIO (src/lib/envio): cada destinatário passa por opt-out, janela,
+// ritmo e teto do dia do número. Barrado por ritmo/teto = a leva para e o item fica
+// pendente no Arca para a próxima rodada; opt-out = marcado como falha no Arca.
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
 
@@ -49,6 +54,44 @@ export type ResultadoLeva = {
 const zero = (): ResultadoLeva => ({ pedidos: 0, enviados: 0, falhas: 0, erros: [] })
 
 const espacar = () => sleep(jitterMs(SALOMAO_JITTER_MIN_MS, SALOMAO_JITTER_MAX_MS))
+
+type Passo = { ok: true; wid: string | null } | { ok: false; parar: boolean; motivo: string }
+
+/**
+ * Trava o item (uma vez só, entre instâncias) e envia pelo portão de envio.
+ * `ok:false, parar:true` = ritmo/teto do número: encerre a leva, o item continua
+ * pendente no Arca. `parar:false` = pule só este item. Erro do transporte é
+ * relançado (o chamador marca a falha no Arca, como antes).
+ * Se a trava em si falhar (banco), segue sem ela — fail-open, como o portão.
+ */
+async function enviarItem(
+  supabase: SupaAdmin,
+  fila: 'boletos' | 'disparos',
+  itemId: string,
+  whatsapp: string,
+  texto: string,
+  enviar: () => Promise<string | null>,
+): Promise<Passo> {
+  const { data: travou, error } = await supabase.rpc('envio_item_reivindicar', { p_fila: fila, p_item_id: itemId })
+  if (error) console.error('[salomao-dispatch] trava do item falhou (seguindo sem ela):', error.message)
+  else if (!travou) return { ok: false, parar: false, motivo: 'ja_reivindicado' }
+
+  const concluir = (sucesso: boolean) =>
+    error ? Promise.resolve() : supabase.rpc('envio_item_concluir', { p_fila: fila, p_item_id: itemId, p_sucesso: sucesso }).then(() => {})
+
+  try {
+    const r = await enviarProtegido({ origem: 'salomao', canal: canalNaoOficial(), telefone: whatsapp }, texto, enviar)
+    if (r.status !== 'enviado') {
+      await concluir(false)
+      return { ok: false, parar: r.status === 'adiado', motivo: r.motivo }
+    }
+    await concluir(true)
+    return { ok: true, wid: r.wid }
+  } catch (e) {
+    await concluir(false)
+    throw e
+  }
+}
 
 /**
  * Drena a fila de BOLETOS até `orcamento` envios. Cada item é um PDF com legenda.
@@ -69,15 +112,23 @@ export async function drenarBoletosSalomao(
     const it = items[i]
     out.pedidos++
     try {
-      const sent = await evolutionSendMedia(it.whatsapp, {
-        media: it.url_boleto,
-        fileName: it.nome_arquivo || `${it.aluno || 'boleto'}.pdf`,
-        caption: it.mensagem || '',
+      const passo = await enviarItem(supabase, 'boletos', String(it.id), it.whatsapp, it.mensagem || '', async () => {
+        const sent = await evolutionSendMedia(it.whatsapp, {
+          media: it.url_boleto,
+          fileName: it.nome_arquivo || `${it.aluno || 'boleto'}.pdf`,
+          caption: it.mensagem || '',
+        })
+        return sent?.key?.id ?? null
       })
+      if (!passo.ok) {
+        out.pedidos--
+        if (passo.motivo === 'opt_out') await arcaMarcarEnviado(it.id, false, 'bloqueado pelo CRM: família pediu para parar (opt-out)')
+        if (passo.parar) break
+        continue
+      }
       await arcaMarcarEnviado(it.id, true)
       out.enviados++
-      const wid: string | null = sent?.key?.id ?? null
-      await registrarBoletoNoChat(supabase, it, wid)
+      await registrarBoletoNoChat(supabase, it, passo.wid)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       out.falhas++
@@ -111,43 +162,52 @@ export async function drenarMensagensSalomao(
     out.pedidos++
     try {
       const n = it.anexos.length
-      let wid: string | null = null
+      const passo = await enviarItem(supabase, 'disparos', String(it.id), it.whatsapp, it.mensagem || '', async () => {
+        let wid: string | null = null
 
-      if (n === 0) {
-        const sent = await evolutionSendText(it.whatsapp, it.mensagem)
-        wid = sent?.key?.id ?? null
-      } else if (n <= 2) {
-        for (let k = 0; k < n; k++) {
-          const a = it.anexos[k]
-          const sent = await evolutionSendMedia(it.whatsapp, {
-            media: a.url,
-            fileName: a.nome,
-            caption: k === 0 ? it.mensagem : '',
-            mediatype: mediatypeDe(a.mime),
-            mimetype: a.mime,
-          })
-          if (k === 0) wid = sent?.key?.id ?? null
-          if (k < n - 1) await sleep(jitterMs(700, 1400))
+        if (n === 0) {
+          const sent = await evolutionSendText(it.whatsapp, it.mensagem)
+          wid = sent?.key?.id ?? null
+        } else if (n <= 2) {
+          for (let k = 0; k < n; k++) {
+            const a = it.anexos[k]
+            const sent = await evolutionSendMedia(it.whatsapp, {
+              media: a.url,
+              fileName: a.nome,
+              caption: k === 0 ? it.mensagem : '',
+              mediatype: mediatypeDe(a.mime),
+              mimetype: a.mime,
+            })
+            if (k === 0) wid = sent?.key?.id ?? null
+            if (k < n - 1) await sleep(jitterMs(700, 1400))
+          }
+        } else {
+          const sent = await evolutionSendText(it.whatsapp, it.mensagem)
+          wid = sent?.key?.id ?? null
+          for (let k = 0; k < n; k++) {
+            const a = it.anexos[k]
+            await sleep(jitterMs(700, 1400))
+            await evolutionSendMedia(it.whatsapp, {
+              media: a.url,
+              fileName: a.nome,
+              caption: '',
+              mediatype: mediatypeDe(a.mime),
+              mimetype: a.mime,
+            })
+          }
         }
-      } else {
-        const sent = await evolutionSendText(it.whatsapp, it.mensagem)
-        wid = sent?.key?.id ?? null
-        for (let k = 0; k < n; k++) {
-          const a = it.anexos[k]
-          await sleep(jitterMs(700, 1400))
-          await evolutionSendMedia(it.whatsapp, {
-            media: a.url,
-            fileName: a.nome,
-            caption: '',
-            mediatype: mediatypeDe(a.mime),
-            mimetype: a.mime,
-          })
-        }
+        return wid
+      })
+      if (!passo.ok) {
+        out.pedidos--
+        if (passo.motivo === 'opt_out') await arcaMarcarMensagemEnviada(it.id, false, 'bloqueado pelo CRM: família pediu para parar (opt-out)')
+        if (passo.parar) break
+        continue
       }
 
       await arcaMarcarMensagemEnviada(it.id, true)
       out.enviados++
-      await registrarDisparoNoChat(supabase, it, wid)
+      await registrarDisparoNoChat(supabase, it, passo.wid)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       out.falhas++

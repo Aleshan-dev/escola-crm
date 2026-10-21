@@ -1,6 +1,7 @@
 import { createSgeiClient, sgeiConfigurado, normalizarCelularBR } from '@/lib/sgei'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { evolutionSendText } from '@/lib/evolution'
+import { canalNaoOficial, evolutionSendText } from '@/lib/evolution'
+import { enviarProtegido, saldoDoDia } from '@/lib/envio/portao'
 import { telefoneFormatoWhatsApp } from '@/lib/boletos'
 import { jitterMs, sleep } from '@/lib/pacing'
 
@@ -185,7 +186,12 @@ export async function drenarConvites(limite = LIMITE_POR_LEVA): Promise<Resultad
   const supabase = createServerAdminClient()
   const out: ResultadoConvites = { reivindicados: 0, enviados: 0, falhas: 0, erros: [] }
 
-  const items = await reivindicarLote(sgei, limite)
+  // Portão de envio: dimensiona a leva pelo saldo do dia do número ANTES de
+  // reivindicar — item devolvido ao Arca queima uma tentativa dele.
+  const canal = canalNaoOficial()
+  const saldo = await saldoDoDia(canal)
+  if (saldo === 0) return out
+  const items = await reivindicarLote(sgei, saldo == null ? limite : Math.min(limite, saldo))
   out.reivindicados = items.length
   if (items.length === 0) return out
 
@@ -213,11 +219,22 @@ export async function drenarConvites(limite = LIMITE_POR_LEVA): Promise<Resultad
     }
 
     try {
-      const sent = await evolutionSendText(numero, texto)
+      const r = await enviarProtegido(
+        { origem: 'convite', canal, telefone: numero, leadId: it.lead_id ?? null },
+        texto,
+        async () => (await evolutionSendText(numero, texto))?.key?.id ?? null,
+      )
+      if (r.status !== 'enviado') {
+        // Raro (o saldo já foi checado): devolve ao Arca, que decide o retry.
+        out.falhas++
+        out.erros.push(`${it.id}: ${r.status} pelo portão (${r.motivo})`)
+        await marcarEnviado(sgei, it.id, false, `${r.status} pela proteção de envio do CRM: ${r.motivo}`)
+        if (r.status === 'adiado') break
+        continue
+      }
       await marcarEnviado(sgei, it.id, true)
       out.enviados++
-      const wid: string | null = sent?.key?.id ?? null
-      await registrarConviteNoChat(supabase, it, wid)
+      await registrarConviteNoChat(supabase, it, r.wid)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       out.falhas++

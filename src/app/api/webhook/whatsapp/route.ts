@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { cleanWhatsappJid, evolutionSendText } from '@/lib/evolution'
+import { canalNaoOficial, cleanWhatsappJid, evolutionSendText } from '@/lib/evolution'
 import { registrarAlerta } from '@/lib/alertas'
 import {
   processarMensagemRecebida,
@@ -167,6 +167,7 @@ export async function POST(req: NextRequest) {
           origem: 'whatsapp',
           tag: 'whatsapp',
           enviarTexto: enviarEvolution,
+          canalEnvio: canalNaoOficial(),
           canal: ad ? 'meta-ads' : 'organico',
           campanha: ad ? ad.title || ad.sourceId || null : null,
           referral: ad || null,

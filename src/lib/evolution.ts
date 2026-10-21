@@ -32,6 +32,11 @@ function provider(): 'evolution' | 'waha' {
   return (process.env.WHATSAPP_PROVIDER || 'evolution').toLowerCase() === 'waha' ? 'waha' : 'evolution'
 }
 
+/** Canal físico por onde `evolutionSendText`/`Media` saem agora (rótulo do portão de envio). */
+export function canalNaoOficial(): 'evolution' | 'waha' {
+  return provider()
+}
+
 // ============================================================================
 // Implementação EVOLUTION (legado). Mantida intacta — é o rollback da flag.
 // ============================================================================

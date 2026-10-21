@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTemplateWhatsApp, enviarTextoWhatsApp, corpoTemplate } from '@/lib/whatsapp-cloud'
+import { canalDeSaida, enviarTemplateWhatsApp, enviarTextoWhatsApp, corpoTemplate } from '@/lib/whatsapp-cloud'
+import { enviarProtegido } from '@/lib/envio/portao'
 
 // Envia o template aprovado "retomada_lead" para um lead com a janela de 24h fechada.
 // Acionado pelo botão "Enviar retomada" no painel de Alertas (usuário logado).
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
   const admin = createServerAdminClient()
   const { data: lead } = await admin
     .from('leads')
-    .select('id, familia:familias(telefone, nome_responsavel, whatsapp_phone_number_id)')
+    .select('id, familia_id, familia:familias(telefone, nome_responsavel, whatsapp_phone_number_id)')
     .eq('id', lead_id)
     .maybeSingle()
   const fam = (lead as { familia?: { telefone?: string; nome_responsavel?: string; whatsapp_phone_number_id?: string | null } } | null)?.familia
@@ -25,20 +26,41 @@ export async function POST(req: NextRequest) {
 
   try {
     const texto = corpoTemplate('retomada_lead', [fam.nome_responsavel || 'família'])
-    let wid: string | null
-    try {
-      wid = await enviarTemplateWhatsApp(
-        fam.telefone,
-        'retomada_lead',
-        'pt_BR',
-        [fam.nome_responsavel || 'família'],
-        fam.whatsapp_phone_number_id
+    const tel = fam.telefone
+    // Portão de envio (src/lib/envio): retomada é proativa — opt-out, janela de
+    // disparo, teto do dia e ritmo do número valem.
+    const r = await enviarProtegido(
+      {
+        origem: 'reengajar',
+        canal: await canalDeSaida(tel, fam.whatsapp_phone_number_id),
+        telefone: tel,
+        leadId: lead_id,
+        familiaId: (lead as { familia_id?: string } | null)?.familia_id ?? null,
+      },
+      texto,
+      async () => {
+        try {
+          return await enviarTemplateWhatsApp(
+            tel,
+            'retomada_lead',
+            'pt_BR',
+            [fam.nome_responsavel || 'família'],
+            fam.whatsapp_phone_number_id
+          )
+        } catch {
+          // Sem conta Cloud ativa (ou template indisponível): via Evolution o texto
+          // livre entrega a qualquer hora — mesmo conteúdo do template aprovado.
+          return await enviarTextoWhatsApp(tel, texto, fam.whatsapp_phone_number_id)
+        }
+      }
+    )
+    if (r.status !== 'enviado') {
+      return NextResponse.json(
+        { ok: false, protecao: r.status, motivo: r.motivo, proxima_tentativa: r.proximaTentativa },
+        { status: 409 }
       )
-    } catch {
-      // Sem conta Cloud ativa (ou template indisponível): via Evolution o texto
-      // livre entrega a qualquer hora — mesmo conteúdo do template aprovado.
-      wid = await enviarTextoWhatsApp(fam.telefone, texto, fam.whatsapp_phone_number_id)
     }
+    const wid = r.wid
     await admin.from('mensagens').insert({
       lead_id, direcao: 'out_ia',
       conteudo: texto,

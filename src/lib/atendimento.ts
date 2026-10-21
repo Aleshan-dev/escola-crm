@@ -9,6 +9,8 @@ import { decidirPolitica } from '@/lib/maestro/politica'
 import { detectarOptOut } from '@/lib/maestro/opt-out'
 import { validarResposta } from '@/lib/maestro/validar-resposta'
 import { registrarDecisaoRoteador } from '@/lib/roteador/log'
+import { protegerEnviarTexto } from '@/lib/envio/portao'
+import type { Canal } from '@/lib/envio/defaults'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -180,9 +182,11 @@ export async function processarMensagemRecebida(
     phoneNumberId?: string | null // número oficial da escola que recebeu a mensagem
     tipoMidia?: string // 'texto' | 'imagem' | 'audio' | 'documento' | 'video'
     urlMidia?: string | null // caminho do arquivo no storage (bucket 'midias')
+    /** Número físico por onde a resposta sai — liga o portão de envio (src/lib/envio). */
+    canalEnvio?: Canal
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio } = params
 
   // Idempotência: se este wid já foi processado (retry do webhook / upsert duplicado),
   // não registra de novo nem roda a Sara — evita respostas duplicadas. Rede de
@@ -488,9 +492,18 @@ export async function processarMensagemRecebida(
   // ANTES de enviar. 'log' só registra o que vetaria (não bloqueia); 'off' desliga.
   // Envolve o envio dos DOIS agentes. O bloqueio real ('ativo') depende da lista de
   // fatos oficiais do proprietário — até lá, 'ativo' também só registra.
+  // Portão de envio anti-ban (src/lib/envio): opt-out, janela, repetição, ritmo e
+  // contagem no ledger por número. Só quando o webhook informa o canal físico.
+  const enviarNoCanal: EnviarTexto = canalEnvio
+    ? protegerEnviarTexto(
+        { origem: 'resposta_ia', canal: canalEnvio, leadId: lead.id, familiaId: familia.id },
+        enviarTexto
+      )
+    : enviarTexto
+
   const enviarValidado: EnviarTexto =
     validacaoModo === 'off'
-      ? enviarTexto
+      ? enviarNoCanal
       : async (telefone, texto) => {
           const r = validarResposta(texto)
           if (!r.ok) {
@@ -499,7 +512,7 @@ export async function processarMensagemRecebida(
               r.vetos.map((v) => `${v.codigo}:${v.trecho}`).join(' | ')
             )
           }
-          return enviarTexto(telefone, texto)
+          return enviarNoCanal(telefone, texto)
         }
 
   // Responsável MATRICULADO + Salomão ativo => Salomão atende (nunca a Sara).
