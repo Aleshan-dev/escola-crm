@@ -24,7 +24,9 @@ export type SaraFamiliaDados = {
 
 export type SaraCriancaDados = {
   nome?: string
-  idade?: number
+  // O modelo às vezes devolve texto ("2 anos"); dados-lead.ts normaliza antes de gravar.
+  idade?: number | string
+  idade_meses?: number | string
   data_nascimento?: string
   serie_desejada?: string
   periodo?: string
@@ -315,7 +317,7 @@ AGENDAMENTO DE VISITA — BLOQUEADO (descoberta incompleta)
 ════════════════════════════════
 Você AINDA NÃO pode oferecer visita nem citar horários a esta família. Falta preencher a descoberta — veja exatamente o que falta em "DADOS OBRIGATÓRIOS FALTANDO", na seção de dados desta família. Descubra e registre, UMA pergunta por vez (se a família perguntou algo, responda primeiro e pergunte depois):
 - nome da criança;
-- idade da criança: registre SEMPRE que ela for dita, em anos ("2 anos") OU em meses ("9 meses", "1 ano e meio"), gravando em "crianca_dados.idade" e/ou "crianca_dados.idade_meses". NUNCA deixe a idade só no texto: se você já usou a idade para inferir a turma (ex.: Berçário), então ela FOI dita e PRECISA estar gravada nesse campo.
+- idade da criança: registre SEMPRE que ela for dita, em anos ("2 anos") OU em meses ("9 meses", "1 ano e meio"), gravando em "crianca_dados.idade" e/ou "crianca_dados.idade_meses" (SEMPRE números inteiros, nunca texto: "3 anos e 5 meses" = idade 3, idade_meses 5). NUNCA deixe a idade só no texto: se você já usou a idade para inferir a turma (ex.: Berçário), então ela FOI dita e PRECISA estar gravada nesse campo.
 - o MOTIVO REAL da busca, a "dor": por que procura escola agora e, se a criança já estuda em outra, o que gostaria de encontrar de diferente (nunca critique a escola atual). Grave em "crianca_dados.motivo_busca", uma frase curta com as palavras da família.
 Assim que o que falta estiver preenchido, o sistema libera os horários no próximo turno.
 PROIBIDO AGORA: oferecer visita, citar dia ou horário, dizer "posso te receber".
@@ -475,7 +477,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "proxima_coluna_id": "uuid ou null",
   "razao_movimentacao": "texto ou null",
   "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
-  "crianca_dados": { "nome": "...", "idade": 3, "serie_desejada": "G3", "periodo": "Integral", "motivo_busca": "o que a família busca / a dor, nas palavras dela" } ou null,
+  "crianca_dados": { "nome": "...", "idade": 3, "idade_meses": 5, "serie_desejada": "G3", "periodo": "Integral", "motivo_busca": "o que a família busca / a dor, nas palavras dela" } ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
   "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,

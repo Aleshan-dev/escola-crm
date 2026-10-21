@@ -1,5 +1,6 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
+import { completarDadosLead, salvarDadosLead } from '@/lib/dados-lead'
 import { notificarGestor } from '@/lib/notificacoes'
 import { labelAcre } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
@@ -687,58 +688,23 @@ export async function processarMensagemRecebida(
         }).eq('id', lead.id)
       }
 
-      // Dados da família extraídos
-      if (saraResult.familia_dados) {
-        const fd = saraResult.familia_dados
-        const update: Record<string, string> = {}
-        if (fd.nome_responsavel) update.nome_responsavel = fd.nome_responsavel
-        if (fd.email) update.email = fd.email
-        if (fd.cep) update.cep = fd.cep
-        if (fd.rua) update.rua = fd.rua
-        if (fd.numero) update.numero = fd.numero
-        if (fd.bairro) update.bairro = fd.bairro
-        if (fd.cidade) update.cidade = fd.cidade
-        if (fd.estado) update.estado = fd.estado
-        if (Object.keys(update).length > 0) {
-          await supabase.from('familias').update(update).eq('id', familia.id)
-        }
-      }
-
-      // Criança
-      if (saraResult.crianca_dados) {
-        const cd = saraResult.crianca_dados
-        if (cd.nome || cd.idade || cd.serie_desejada || cd.periodo || cd.motivo_busca) {
-          if (lead.crianca_id) {
-            const update: Record<string, string | number> = {}
-            if (cd.nome) update.nome = cd.nome
-            if (cd.idade) update.idade = cd.idade
-            if (cd.data_nascimento) update.data_nascimento = cd.data_nascimento
-            if (cd.serie_desejada) update.serie_desejada = cd.serie_desejada
-            if (cd.periodo) update.periodo = cd.periodo
-            if (cd.motivo_busca) update.motivo_busca = cd.motivo_busca
-            if (Object.keys(update).length > 0) {
-              await supabase.from('criancas').update(update).eq('id', lead.crianca_id)
-            }
-          } else {
-            const { data: novaCrianca } = await supabase
-              .from('criancas')
-              .insert({
-                familia_id: familia.id,
-                nome: cd.nome || 'A confirmar',
-                idade: cd.idade || null,
-                data_nascimento: cd.data_nascimento || null,
-                serie_desejada: cd.serie_desejada || null,
-                periodo: cd.periodo || null,
-                motivo_busca: cd.motivo_busca || null,
-              })
-              .select('id')
-              .single()
-
-            if (novaCrianca) {
-              await supabase.from('leads').update({ crianca_id: novaCrianca.id }).eq('id', lead.id)
-            }
-          }
-        }
+      // Dados da família e da criança extraídos pela Sara neste turno. Normaliza
+      // os tipos antes de gravar (idade "2 anos" derrubava o insert inteiro) e,
+      // se a ficha continuar com buraco, o extrator dedicado completa o que a
+      // conversa já respondeu. Ver src/lib/dados-lead.ts.
+      try {
+        const salvo = await salvarDadosLead(supabase, {
+          leadId: lead.id,
+          familiaId: familia.id,
+          criancaId: lead.crianca_id ?? null,
+          familiaDados: saraResult.familia_dados,
+          criancaDados: saraResult.crianca_dados,
+          sobrescrever: true,
+        })
+        lead.crianca_id = salvo.criancaId
+        await completarDadosLead(supabase, lead.id)
+      } catch (e) {
+        console.error('[dados-lead] falha ao gravar dados do lead', lead.id, e)
       }
 
       // Agendamento de visita confirmado pela Sara. TRAVA (2026-09-02): só cria a
