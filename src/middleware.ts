@@ -30,11 +30,17 @@ export async function middleware(request: NextRequest) {
   // Callback do OAuth (Google): precisa passar sem exigir sessão, pois ela
   // ainda vai ser criada dentro da rota /auth/callback.
   const isAuthCallback = url.pathname.startsWith('/auth')
-  // Rotas de API que fazem a própria autenticação (webhooks, cron e admin protegido por CRON_SECRET/sessão)
+  // Rotas de API que fazem a própria autenticação (webhooks, cron e admin protegido por CRON_SECRET/sessão).
+  // IMPORTANTE: /api/google/push-tarefa (trigger do Postgres, Bearer GOOGLE_PUSH_SECRET) e
+  // /api/google/webhook (push notifications do Google, token do canal) são chamadas máquina-a-máquina
+  // SEM sessão — se caírem no redirect de /login o POST vira 405 e o push instantâneo morre (era o
+  // caso: visitas da Sara só sincronizavam no cron diário). Elas autenticam sozinhas, então passam direto.
   const isApiWebhook =
     url.pathname.startsWith('/api/webhook') ||
     url.pathname.startsWith('/api/cron') ||
-    url.pathname.startsWith('/api/admin')
+    url.pathname.startsWith('/api/admin') ||
+    url.pathname.startsWith('/api/google/push-tarefa') ||
+    url.pathname.startsWith('/api/google/webhook')
   const isPublic = url.pathname.startsWith('/privacy') || url.pathname.startsWith('/termos')
 
   // Webhooks do WhatsApp não precisam de auth
