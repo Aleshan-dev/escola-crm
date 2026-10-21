@@ -67,3 +67,37 @@ A migration é aditiva; pode ficar no banco sem efeito.
 `src/lib/maestro/*.test.ts` e `src/lib/roteador/*.test.ts` — política (precedência
 e paridade com o legado), opt-out (PT, acentos, falsos positivos), roteador e
 validação de saída. Rodar: `npm test`.
+
+## Classificador de intenção (desde 21/10/2026)
+
+Camada opcional por cima da guarda, no estilo do roteador do DeskcommCRM, adaptada:
+o escola-crm tem uma regra dura (vínculo SGEI → Salomão; família nova → Sara) que o
+classificador **não** pode quebrar.
+
+- **Tela:** `/configuracoes/roteador` (ligar/desligar, credencial, modelo, confiança mínima,
+  histórico de contexto, intenções e o painel **Testar classificação**), mais
+  `/configuracoes/roteador/decisoes`.
+- **Código:**
+  - `src/lib/roteador/classificador.ts`: prompt + leitura do JSON (puro); `classificarIntencao`;
+  - `resolver.ts`: `resolverRota` (puro);
+  - `turno.ts`: config, contexto e o efeito `encaminharParaHumano`.
+  - Ligado em `processarMensagemRecebida` logo após `decidirPolitica`.
+- **Banco:** `crm.roteador_config` (1 linha, `classificador_ligado=false` por padrão),
+  `crm.roteador_intencoes` (5 sementes) e as colunas novas `intencao`/`confianca`/`resultado`
+  em `roteador_decisoes`. SQL em `docs/sql/2026-10-21-roteador-classificador.sql`.
+- **O que o classificador pode fazer:** só **manter** o agente da guarda ou **encaminhar para
+  humano**. O encaminhamento acontece quando a intenção tem agente `humano` e a confiança passa
+  do mínimo. O efeito é o do transbordo da Sara: `precisa_atendimento_humano` + `ia_ativa=false`
+  + aviso ao gestor, uma vez só (update condicional).
+  - Se a intenção apontar outro agente de IA, o resultado é `vetado_guarda` e fica registrado.
+    Exemplo: "matrícula" vinda de uma família matriculada.
+  - Falha, `none` ou confiança baixa: vale a guarda.
+- **Diferenças para o Deskcomm:**
+  - Não há troca de agente por intenção. O "sticky" é estrutural (o agente vem do estado da
+    família), então os campos `sticky` e `fallback` não existem.
+  - Não há funil/etapa de destino por intenção: a Sara já move o card.
+  - O mínimo de confiança **é** editável na tela.
+- **Custo:** com o classificador ligado, é uma chamada de IA por mensagem recebida que a IA
+  responderia. Mensagens de leads pausados ou em atendimento humano não são classificadas.
+- **Fora do escopo agora:** irmão de aluno matriculado querendo matricular outro filho
+  (Sara para matriculado). Hoje a guarda veta; isso exige uma decisão de produto.

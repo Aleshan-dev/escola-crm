@@ -7,9 +7,9 @@
  *   - família NOVA / em captação                    → `sara`
  *
  * Não há chamada de IA aqui: a rota sai de estado confiável (vínculo SGEI + flag),
- * nunca do texto da mensagem. Um 3º agente real justificaria um classificador de
- * intenção; até lá, `classificarIntencao` fica como interface desligada (ver
- * `classificador.ts` / flag `config_ia.roteador_classificador_llm`).
+ * nunca do texto da mensagem. Esta é a GUARDA. A camada de intenção opcional
+ * (`classificador.ts` + `resolver.ts`, ligada em `crm.roteador_config`) roda por
+ * cima e só pode manter este agente ou encaminhar para humano.
  *
  * Fallback seguro (prompt §8): sem destino elegível, a rota é `humano` — nunca
  * silêncio e nunca uma ação comercial indevida.

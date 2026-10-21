@@ -9,6 +9,7 @@ import { decidirPolitica } from '@/lib/maestro/politica'
 import { detectarOptOut } from '@/lib/maestro/opt-out'
 import { validarResposta } from '@/lib/maestro/validar-resposta'
 import { registrarDecisaoRoteador } from '@/lib/roteador/log'
+import { encaminharParaHumano, resolverTurno } from '@/lib/roteador/turno'
 import { protegerEnviarTexto } from '@/lib/envio/portao'
 import type { Canal } from '@/lib/envio/defaults'
 
@@ -468,8 +469,22 @@ export async function processarMensagemRecebida(
     jaResponsavel,
     salomaoAtivo,
   })
-  if (maestroAtivo) {
-    await registrarDecisaoRoteador(supabase, { leadId: lead.id, canal: origem, decisao })
+  // ── ROTEADOR: camada de intenção (src/lib/roteador/turno.ts) ────────────
+  // Desligada por padrão (roteador_config.classificador_ligado). Quando ligada, só
+  // pode manter o agente da guarda acima ou encaminhar para humano.
+  const resolvida = await resolverTurno(supabase, { leadId: lead.id, texto: conteudo, guarda: decisao })
+  if (maestroAtivo || resolvida.resultado !== 'guarda') {
+    await registrarDecisaoRoteador(supabase, { leadId: lead.id, canal: origem, decisao, resolvida })
+  }
+  if (resolvida.resultado === 'escalado_humano') {
+    await encaminharParaHumano(supabase, {
+      leadId: lead.id,
+      nomeFamilia: familia.nome_responsavel || 'Família',
+      telefone,
+      intencao: resolvida.intencao ?? '?',
+      confianca: resolvida.confianca,
+    })
+    return lead.id
   }
 
   // Opt-out: cliente pediu para parar. Pausa a IA e não responde. A gravação em

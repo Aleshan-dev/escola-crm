@@ -34,11 +34,18 @@ export type Mensagem = { role: 'system' | 'user' | 'assistant'; content: string 
 
 // O Maestro Guardião (chat de reorganização) não tem credencial própria: reusa a
 // da Sara (fallback env). Evita migração/coluna nova no config_ia vivo.
-async function resolverCredencial(agente: 'sara' | 'salomao' | 'maestro', db: SupaAdmin): Promise<CredResolvida> {
+async function resolverCredencial(
+  agente: 'sara' | 'salomao' | 'maestro',
+  db: SupaAdmin,
+  credencialId?: string | null
+): Promise<CredResolvida> {
   const col = agente === 'salomao' ? 'salomao_credencial_id' : 'sara_credencial_id'
   try {
-    const { data: cfg } = await db.from('config_ia').select(col).eq('id', 1).maybeSingle()
-    const credId = (cfg as Record<string, string | null> | null)?.[col] ?? null
+    let credId = credencialId ?? null
+    if (!credId) {
+      const { data: cfg } = await db.from('config_ia').select(col).eq('id', 1).maybeSingle()
+      credId = (cfg as Record<string, string | null> | null)?.[col] ?? null
+    }
     if (credId) {
       const { data: cred } = await db.from('ia_credenciais').select('provedor, api_key, base_url').eq('id', credId).maybeSingle()
       if (cred?.api_key) {
@@ -70,11 +77,18 @@ export function extrairJson(texto: string): string {
  */
 export async function chamarModeloIA(
   agente: 'sara' | 'salomao' | 'maestro',
-  params: { messages: Mensagem[]; model: string; maxTokens: number; jsonMode?: boolean },
+  params: {
+    messages: Mensagem[]
+    model: string
+    maxTokens: number
+    jsonMode?: boolean
+    /** Credencial específica (ex.: a do roteador); sem ela, vale a do agente. */
+    credencialId?: string | null
+  },
   supabase?: SupaAdmin
 ): Promise<string> {
   const db = supabase ?? createServerAdminClient()
-  const { provedor, apiKey, baseUrl } = await resolverCredencial(agente, db)
+  const { provedor, apiKey, baseUrl } = await resolverCredencial(agente, db, params.credencialId)
 
   if (provedor === 'anthropic') {
     const anthropic = new Anthropic({ apiKey })
