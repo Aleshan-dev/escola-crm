@@ -25,7 +25,7 @@ import { executarFollowup } from '../followup/route'
 // ============================================================================
 
 // Roda o follow-up em processo; folga de tempo para o loop + pacing (jitter entre envios).
-export const maxDuration = 60
+export const maxDuration = 120 // mesmo teto do /api/cron/followup (orçamento interno de 80s)
 
 export async function GET(req: NextRequest) {
   const autorizado =

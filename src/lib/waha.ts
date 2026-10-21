@@ -109,7 +109,10 @@ export function numeroParaChatId(numero: string): string {
 
 // Formas candidatas de um número BR: como veio E a variante com/sem o 9º dígito.
 // A ordem prioriza a forma "como está no banco", depois a alternativa.
-function candidatosBR(digitos: string): string[] {
+export function candidatosBR(digitosBrutos: string): string[] {
+  // Celular BR salvo sem o 55 ('+68992624996' → '68992624996': DDD + 9 + 8 dígitos)
+  // ia para o WAHA como se 68/61 fosse código de país ("no LID found"). Completa o 55.
+  const digitos = /^[1-9][1-9]9\d{8}$/.test(digitosBrutos) ? `55${digitosBrutos}` : digitosBrutos
   const out = [digitos]
   if (digitos.length === 13 && digitos.startsWith('55') && digitos[4] === '9') {
     out.push(digitos.slice(0, 4) + digitos.slice(5)) // sem o 9
@@ -157,7 +160,7 @@ export async function resolverChatId(numero: string): Promise<string> {
   }
 
   // Fallback: check-exists fora do ar → heurística regional (não trava o envio).
-  return `${normalizarJidBR(digitos)}@c.us`
+  return `${normalizarJidBR(candidatosBR(digitos)[0])}@c.us`
 }
 
 // Resolve o número REAL por trás de um endereço @lid (identificador opaco novo do

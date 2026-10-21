@@ -23,7 +23,8 @@ type Preview = {
   followup_max?: number
   marco?: string
   janela_aberta?: boolean
-  decisao?: 'enviaria_cloud' | 'criaria_alerta_manual'
+  decisao?: 'enviaria_cloud' | 'enviaria_waha' | 'criaria_alerta_manual'
+  canal?: 'cloud' | 'waha' | 'evolution'
   mensagem?: string
   baloes?: string[]
   anotacoes?: { conteudo: string; criado_em: string }[]
@@ -204,9 +205,11 @@ export default function FollowupConfigPage() {
                   </div>
                 </div>
                 <div className="rounded-lg bg-slate-50 p-2">
-                  <div className="text-slate-400">Janela 24h</div>
+                  <div className="text-slate-400">{preview.canal && preview.canal !== 'cloud' ? 'Canal' : 'Janela 24h'}</div>
                   <div className={`font-medium ${preview.janela_aberta ? 'text-green-600' : 'text-amber-600'}`}>
-                    {preview.janela_aberta ? 'Aberta' : 'Fechada'}
+                    {preview.canal && preview.canal !== 'cloud'
+                      ? `${preview.canal.toUpperCase()} (sem janela)`
+                      : preview.janela_aberta ? 'Aberta' : 'Fechada'}
                   </div>
                 </div>
               </div>
@@ -218,7 +221,9 @@ export default function FollowupConfigPage() {
               >
                 {preview.janela_aberta ? <Send className="h-4 w-4" /> : <MessageCircle className="h-4 w-4" />}
                 {preview.janela_aberta
-                  ? 'Enviaria automaticamente pela API Cloud (texto livre).'
+                  ? preview.decisao === 'enviaria_cloud'
+                    ? 'Enviaria automaticamente pela API Cloud (texto livre).'
+                    : `Enviaria automaticamente pelo ${(preview.canal ?? 'waha').toUpperCase()} (texto livre, a qualquer hora).`
                   : 'Criaria um alerta de envio manual em Pendentes (copiar/abrir no WhatsApp).'}
               </div>
 

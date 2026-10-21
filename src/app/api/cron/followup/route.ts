@@ -26,7 +26,12 @@ import { dividirEmBaloes } from '@/lib/atendimento'
 import { ACRE_SHIFT_MS } from '@/lib/disponibilidade'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
-export const maxDuration = 30
+// 21/10/2026: com tudo saindo pelo WAHA (check-exists + envio ~4-5s por balão) e o
+// portão de envio, 30s não cabia nem um lead — TODA rodada morria no meio (balão 1
+// entregue, sem followup_log nem contador → risco de repetir). Teto maior + orçamento
+// interno (ORCAMENTO_MS) para não começar lead novo perto do limite.
+export const maxDuration = 120
+const ORCAMENTO_MS = 80_000
 
 // ADR-004: o cron decide QUANDO agir (regras determinísticas em followup-regras.ts);
 // a Sara decide O QUE dizer.
@@ -197,6 +202,7 @@ export async function GET(req: NextRequest) {
 // de NEXT_PUBLIC_APP_URL/CRON_SECRET/SSO. Auto-gateia em horário comercial e
 // followup_ativo, então é seguro chamar de qualquer origem já autenticada.
 export async function executarFollowup(agora: number = Date.now()) {
+  const inicioExecucao = Date.now()
   if (!dentroHorarioComercial(agora)) {
     return { skipped: `fora_do_horario_comercial (${horaAcre(agora)}h Acre)` }
   }
@@ -259,6 +265,9 @@ export async function executarFollowup(agora: number = Date.now()) {
     // de gerações numa mesma execução e estourava o maxDuration de 30s (504). O resto
     // fica para a próxima rodada (a cada 15 min), drenando ~MAX por vez.
     if (toques >= MAX_ENVIOS_POR_EXECUCAO) break
+    // Orçamento de tempo: um lead (geração + balões pelo WAHA) leva ~20-30s; não
+    // começa outro se não houver folga até o maxDuration.
+    if (Date.now() - inicioExecucao > ORCAMENTO_MS) break
     const tel = lead.familia?.telefone
     const col = lead.coluna
     if (!tel || !col) continue
@@ -484,8 +493,11 @@ export async function executarFollowup(agora: number = Date.now()) {
       // roteia a saída pelo mesmo canal do lead). No canal oficial (Cloud) respeitamos
       // a janela: fechada → alerta de envio manual (copiar e colar), SEM retomada
       // automática por template (decisão do gestor, 2026-09-22).
-      const usaWaha = lead.familia?.canal_whatsapp === 'waha'
-      const aberta = usaWaha || (await janelaAberta(supabase, tel))
+      // A janela só existe se a saída REAL for a Cloud (canalDeSaida, mesma regra do
+      // enviarTextoWhatsApp). Desde 21/10/2026 todas as contas Cloud estão inativas e
+      // tudo sai pelo WAHA — família marcada 'cloud' ou sem canal não pode mais virar
+      // "janela fechada" (gerava alerta manual + transbordo à toa).
+      const aberta = canalSaida !== 'cloud' || (await janelaAberta(supabase, tel))
       if (!aberta) {
         if (texto.trim()) {
           await escalarFollowupJanelaFechada(supabase, {
@@ -560,7 +572,9 @@ export async function executarFollowup(agora: number = Date.now()) {
     })
 
     // Número inexistente no WhatsApp: para de tentar esse lead (ADR-005).
-    if (!enviado && /"exists"\s*:\s*false/.test(erro || '')) {
+    // "no LID found" (WAHA) = o servidor do WhatsApp não acha conta para o número
+    // (ex.: telefone salvo sem o 55). Repetia a cada 15 min, sempre primeiro da fila.
+    if (!enviado && /"exists"\s*:\s*false|no LID found/.test(erro || '')) {
       await supabase.from('leads').update({ followup_status: 'esgotado' }).eq('id', lead.id)
       resultados.push({ lead: lead.id, trigger, enviado: false, skip: 'numero_inexistente' })
       continue

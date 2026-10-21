@@ -101,3 +101,21 @@ classificador **não** pode quebrar.
   responderia. Mensagens de leads pausados ou em atendimento humano não são classificadas.
 - **Fora do escopo agora:** irmão de aluno matriculado querendo matricular outro filho
   (Sara para matriculado). Hoje a guarda veta; isso exige uma decisão de produto.
+
+## Versões da Sara e do Salomão (desde 21/10/2026)
+
+Nome, modelo, credencial, "informa preço" e prompt (Sara) e modelo, credencial,
+preâmbulo e canais de pagamento (Salomão) são versionados em `crm.agente_versoes`
+(SQL: `docs/sql/2026-10-21-agente-versoes.sql`; regras: `src/lib/agente-versoes/`).
+
+- Editar em /configuracoes/sara ou /salomao grava **rascunho** — produção não muda.
+- "Testar antes de publicar" gera a resposta para a conversa de um lead real com a
+  edição atual (opcionalmente lado a lado com a do ar). Não envia nada; chama a IA.
+- **Publicar** cria vN (função `crm.publicar_agente_versao`, atômica) e reflete em
+  `config_ia`; quem lê (`sara.ts`, `salomao.ts`, `ia-credenciais.ts`) não mudou.
+- Aba **Histórico**: diff de cada versão com a anterior e "Voltar para esta versão"
+  (republica o snapshot antigo como vN+1; o histórico nunca é reescrito).
+- O Maestro (`agente_prompt` / `agente_modelo`) agora **gera rascunho** em vez de
+  escrever em `config_ia`; o gestor publica na tela do agente.
+- Fora do versionamento (efeito imediato): `salomao_ativo` (kill switch) e a base de conhecimento.
+- v1 de cada agente = configuração que estava em produção na migração.
