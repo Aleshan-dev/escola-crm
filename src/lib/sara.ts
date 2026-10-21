@@ -118,7 +118,9 @@ export async function gerarRespostaSara(
   leadId: string,
   colunas?: SaraColuna[],
   colunaAtual?: SaraColuna,
-  promptAdicional?: string
+  promptAdicional?: string,
+  /** Teste de rascunho (versionamento): campos de config_ia que sobrepõem os do banco. Nunca usado em produção. */
+  configOverride?: Record<string, unknown> | null
 ): Promise<SaraResposta> {
   const supabase = createServerAdminClient()
 
@@ -130,7 +132,8 @@ export async function gerarRespostaSara(
 
   if (!lead) throw new Error('Lead não encontrado')
 
-  const { data: config } = await supabase.from('config_ia').select('*').eq('id', 1).single()
+  const { data: configBanco } = await supabase.from('config_ia').select('*').eq('id', 1).single()
+  const config = configOverride ? { ...(configBanco ?? {}), ...configOverride } : configBanco
   const { data: kb } = await supabase
     .from('base_conhecimento')
     .select('categoria, pergunta, resposta')
@@ -517,7 +520,11 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
 
   const modelo = config?.modelo?.trim() || 'gpt-4o'
 
-  const raw = (await chamarModeloIA('sara', { messages, model: modelo, maxTokens: 700, jsonMode: true })) || '{}'
+  const raw = (await chamarModeloIA('sara', {
+    messages, model: modelo, maxTokens: 700, jsonMode: true,
+    // Rascunho sem credencial (null) cai na do banco — igual à produção quando ela também é vazia.
+    credencialId: configOverride ? ((config?.sara_credencial_id as string | null) ?? null) : undefined,
+  })) || '{}'
 
   try {
     const parsed = JSON.parse(raw) as Partial<SaraResposta>

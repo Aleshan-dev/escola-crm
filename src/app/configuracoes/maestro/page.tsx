@@ -19,6 +19,7 @@ interface Proposta {
   rascunho_codigo?: { alvo: string; conteudo: string }
   estado?: EstadoProposta
   resultado?: string
+  link?: string
 }
 
 const INSTRUCAO_ANALISE =
@@ -105,6 +106,7 @@ export default function MaestroChatPage() {
       atualizarProposta(msgIdx, propIdx, {
         estado: data.ok ? 'aplicada' : 'erro',
         resultado: data.mensagem,
+        link: data.link,
       })
     } catch (e) {
       atualizarProposta(msgIdx, propIdx, { estado: 'erro', resultado: e instanceof Error ? e.message : 'Erro ao aplicar.' })
@@ -146,7 +148,7 @@ export default function MaestroChatPage() {
 
         <p className="mt-2 mb-4 flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[12px] text-amber-800">
           <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
-          Nenhuma mudança acontece sozinha: o Maestro só <strong className="mx-1">propõe</strong>. As alterações só valem quando você clica em <strong className="mx-1">Aplicar</strong>. O que mora em código (travas de segurança, roteador) vem como <strong className="mx-1">rascunho</strong> para um dev aplicar e deployar.
+          Nenhuma mudança acontece sozinha: o Maestro só <strong className="mx-1">propõe</strong>. As alterações só valem quando você clica em <strong className="mx-1">Aplicar</strong> — e prompt/modelo da Sara e do Salomão viram <strong className="mx-1">rascunho</strong>, que só entra no ar quando você publica na tela do agente. O que mora em código (travas de segurança, roteador) vem como <strong className="mx-1">rascunho</strong> para um dev aplicar e deployar.
         </p>
 
         {/* Conversa */}
@@ -214,6 +216,9 @@ export default function MaestroChatPage() {
                             {p.estado === 'aplicada' ? (
                               <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
                                 <Check className="w-4 h-4" /> Aplicado{p.resultado ? ` · ${p.resultado}` : ''}
+                                {p.link && (
+                                  <Link href={p.link} className="ml-1 text-indigo-600 underline hover:text-indigo-800">Revisar e publicar</Link>
+                                )}
                               </span>
                             ) : p.estado === 'recusada' ? (
                               <span className="inline-flex items-center gap-1 text-xs text-slate-400"><X className="w-4 h-4" /> Recusado</span>

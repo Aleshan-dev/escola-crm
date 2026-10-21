@@ -19,6 +19,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { chamarModeloIA, type Mensagem } from '@/lib/ia-credenciais'
 import { resolverDiretrizes } from './diretrizes'
 import { decidirPolitica } from './politica'
+import { rascunhoComPatch } from '@/lib/agente-versoes/servico'
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
 
@@ -255,8 +256,8 @@ AÇÕES APLICÁVEIS EM RUNTIME (cada proposta aplicável precisa de "acao" de um
    - booleanas (valor true/false): ${FLAGS_BOOL.join(', ')}
    - enum validacao_saida_modo (valor 'off'|'log'|'ativo')
    - SÓ proponha chaves que EXISTAM no banco. O que o snapshot marca "coluna ausente" NÃO é aplicável: vira recomendação/rascunho de código.
-2. agente_prompt — trocar o prompt de "sara" ou "salomao" (campo prompt = texto COMPLETO novo).
-3. agente_modelo — trocar o modelo de "sara" ou "salomao" (campo modelo, ex.: "gpt-4o").
+2. agente_prompt — trocar o prompt de "sara" ou "salomao" (campo prompt = texto COMPLETO novo). Vira RASCUNHO da configuração do agente: o gestor testa e publica na tela do agente; não entra no ar sozinho.
+3. agente_modelo — trocar o modelo de "sara" ou "salomao" (campo modelo, ex.: "gpt-4o"). Também vira RASCUNHO.
 4. maestro_diretrizes — reescrever as diretrizes do Maestro (campo texto = texto COMPLETO novo; vazio volta ao baseline do código).
 5. lead_mover — mover um lead para outra etapa: { lead_id, coluna_id } com os [id] do snapshot.
 6. lead_ia — ligar/desligar a IA de um lead: { lead_id, ia_ativa }.
@@ -394,6 +395,8 @@ export async function conversarComMaestro(historico: Mensagem[], db?: SupaAdmin)
 export interface ResultadoAplicacao {
   ok: boolean
   mensagem: string
+  /** Para onde o gestor vai concluir (ex.: publicar o rascunho do agente). */
+  link?: string
 }
 
 export async function aplicarAcao(raw: unknown, db?: SupaAdmin): Promise<ResultadoAplicacao> {
@@ -409,19 +412,20 @@ export async function aplicarAcao(raw: unknown, db?: SupaAdmin): Promise<Resulta
         if (error) return { ok: false, mensagem: `Falha no banco: ${error.message}` }
         return { ok: true, mensagem: `${acao.chave} = ${String(acao.valor)} aplicado.` }
       }
-      case 'agente_prompt': {
-        const col = acao.agente === 'sara' ? 'system_prompt' : 'salomao_system_prompt'
-        const valor = acao.prompt.trim() || null
-        const { error } = await supa.from('config_ia').update({ [col]: valor, atualizado_em: agora }).eq('id', 1)
-        if (error) return { ok: false, mensagem: `Falha no banco: ${error.message}` }
-        return { ok: true, mensagem: `Prompt do ${acao.agente} atualizado.` }
-      }
+      // Prompt/modelo dos agentes NÃO vão direto para config_ia: viram rascunho
+      // versionado (crm.agente_versoes). O gestor testa e publica na tela do agente.
+      case 'agente_prompt':
       case 'agente_modelo': {
-        const col = acao.agente === 'sara' ? 'modelo' : 'salomao_modelo'
-        const valor = acao.modelo.trim() || null
-        const { error } = await supa.from('config_ia').update({ [col]: valor, atualizado_em: agora }).eq('id', 1)
-        if (error) return { ok: false, mensagem: `Falha no banco: ${error.message}` }
-        return { ok: true, mensagem: `Modelo do ${acao.agente} = ${valor ?? '(padrão)'} aplicado.` }
+        const patch = acao.tipo === 'agente_prompt'
+          ? { [acao.agente === 'sara' ? 'system_prompt' : 'salomao_system_prompt']: acao.prompt }
+          : { [acao.agente === 'sara' ? 'modelo' : 'salomao_modelo']: acao.modelo }
+        await rascunhoComPatch(acao.agente, patch, { origem: 'maestro', por: 'maestro' }, supa)
+        const oque = acao.tipo === 'agente_prompt' ? 'Prompt' : `Modelo (${acao.modelo.trim() || 'padrão'})`
+        return {
+          ok: true,
+          mensagem: `${oque} do ${acao.agente} salvo como rascunho — ainda não está no ar. Teste e publique na tela do agente.`,
+          link: `/configuracoes/${acao.agente}`,
+        }
       }
       case 'maestro_diretrizes': {
         const valor = acao.texto.trim() || null

@@ -88,17 +88,20 @@ export function formatarPix(pix: ArcaPixItem[]): string {
   return `${abertura}\n\n${blocos.join('\n\n')}\n\n${fecho}`
 }
 
-async function gerarRespostaSalomaoLLM(
+export async function gerarRespostaSalomaoLLM(
   supabase: SupaAdmin,
   leadId: string,
   primeiroNome: string | undefined,
-  cpfTentativas: number
+  cpfTentativas: number,
+  /** Teste de rascunho (versionamento): sobrepõe campos de config_ia. Nunca usado em produção. */
+  configOverride?: Record<string, unknown> | null
 ): Promise<SalomaoLLM> {
-  const { data: config } = await supabase
+  const { data: configBanco } = await supabase
     .from('config_ia')
-    .select('modelo, salomao_modelo, salomao_system_prompt, maestro_diretrizes')
+    .select('modelo, salomao_modelo, salomao_system_prompt, salomao_credencial_id, maestro_diretrizes')
     .eq('id', 1)
     .single()
+  const config = configOverride ? { ...(configBanco ?? {}), ...configOverride } as typeof configBanco : configBanco
 
   const { data: msgs } = await supabase
     .from('mensagens')
@@ -176,7 +179,10 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
   ]
 
   const modelo = config?.salomao_modelo?.trim() || config?.modelo?.trim() || 'gpt-4o'
-  const raw = (await chamarModeloIA('salomao', { messages, model: modelo, maxTokens: 500, jsonMode: true })) || '{}'
+  const raw = (await chamarModeloIA('salomao', {
+    messages, model: modelo, maxTokens: 500, jsonMode: true,
+    credencialId: configOverride ? (config?.salomao_credencial_id ?? null) : undefined,
+  })) || '{}'
   try {
     const p = JSON.parse(raw) as Partial<SalomaoLLM>
     const cpf = typeof p.cpf_prefixo === 'string' ? p.cpf_prefixo.replace(/\D/g, '').slice(0, 3) : null
