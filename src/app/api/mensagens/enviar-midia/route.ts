@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
 import { salvarMidiaStorage } from '@/lib/midia'
-import { enviarMidiaWhatsApp } from '@/lib/whatsapp-cloud'
+import { classificarMidia } from '@/lib/whatsapp-cloud'
+import { carimboCanal, enviarPeloCanal } from '@/lib/canais/enviar'
 import { ehErroJanela } from '@/lib/janela'
 
 // Limite prático de tamanho: o corpo de uma função serverless na Vercel é
@@ -9,8 +10,9 @@ import { ehErroJanela } from '@/lib/janela'
 const LIMITE_BYTES = 4 * 1024 * 1024 // 4 MB
 
 // Envio de MÍDIA (documento/imagem) pela equipe, a partir do chat.
-// Sobe o arquivo ao bucket privado 'midias', despacha pelo WhatsApp (Cloud ou
-// Evolution) e grava no histórico como out_humano.
+// Sobe o arquivo ao bucket privado 'midias', despacha pelo canal da conversa
+// (src/lib/canais, contando no portão anti-ban como envio manual) e grava no
+// histórico como out_humano.
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -36,9 +38,9 @@ export async function POST(req: NextRequest) {
   // Telefone + conta (multi-número) do lead
   const { data: lead } = await supabase
     .from('leads')
-    .select('familia:familias(telefone, whatsapp_phone_number_id)')
+    .select('familia_id, familia:familias(telefone, whatsapp_phone_number_id)')
     .eq('id', leadId)
-    .single<{ familia: { telefone: string; whatsapp_phone_number_id: string | null } }>()
+    .single<{ familia_id: string; familia: { telefone: string; whatsapp_phone_number_id: string | null } }>()
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
 
   const mimetype = file.type || 'application/octet-stream'
@@ -55,14 +57,18 @@ export async function POST(req: NextRequest) {
   const { data: signed } = await admin.storage.from('midias').createSignedUrl(path, 300)
 
   // 3) Despacha pelo WhatsApp (Cloud → id; Evolution → URL assinada)
-  let wid: string | null = null
-  let tipo: 'imagem' | 'video' | 'audio' | 'documento'
+  let saida: Awaited<ReturnType<typeof enviarPeloCanal>>
+  const { tipo } = classificarMidia(mimetype)
   try {
-    const r = await enviarMidiaWhatsApp(lead.familia.telefone, {
-      base64, mimetype, filename, caption: caption || undefined, url: signed?.signedUrl,
-    }, lead.familia.whatsapp_phone_number_id)
-    wid = r.wid
-    tipo = r.tipo
+    saida = await enviarPeloCanal({
+      operacao: 'manual',
+      origem: 'manual',
+      telefone: lead.familia.telefone,
+      familiaId: lead.familia_id,
+      leadId,
+      phoneId: lead.familia.whatsapp_phone_number_id,
+      midia: { base64, mimetype, filename, caption: caption || undefined, url: signed?.signedUrl },
+    })
   } catch (e) {
     // Fora da janela de 24h (só Cloud): não dá para enviar mídia livre. O arquivo
     // fica salvo; a equipe pode enviar manualmente pelo celular.
@@ -86,7 +92,8 @@ export async function POST(req: NextRequest) {
       conteudo: caption || filename,
       tipo_midia: tipo,
       url_midia: path,
-      whatsapp_message_id: wid,
+      whatsapp_message_id: saida.wid,
+      ...carimboCanal(saida),
     })
     .select('*')
     .single()

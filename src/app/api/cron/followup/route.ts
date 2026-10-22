@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { canalDeSaida, enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { canalDeSaida } from '@/lib/whatsapp-cloud'
+import { carimboCanal, enviarPeloCanal } from '@/lib/canais/enviar'
 import { enviarProtegido, preChecarEnvio } from '@/lib/envio/portao'
 import { ehErroJanela, janelaAberta } from '@/lib/janela'
 import { gerarRespostaSara } from '@/lib/sara'
@@ -502,12 +503,12 @@ export async function executarFollowup(agora: number = Date.now()) {
       // A checagem proativa evita gastar uma chamada à API sabidamente fora da janela;
       // o 131047 no catch abaixo é a rede de segurança se a nossa tabela estiver defasada.
       // WAHA não tem janela de 24h: lead que ENTROU pelo WAHA continua recebendo
-      // follow-up PELO WAHA, texto livre, a qualquer hora (o enviarTextoWhatsApp
-      // roteia a saída pelo mesmo canal do lead). No canal oficial (Cloud) respeitamos
+      // follow-up PELO WAHA, texto livre, a qualquer hora (src/lib/canais roteia a
+      // saída pelo mesmo canal do lead). No canal oficial (Cloud) respeitamos
       // a janela: fechada → alerta de envio manual (copiar e colar), SEM retomada
       // automática por template (decisão do gestor, 2026-09-22).
       // A janela só existe se a saída REAL for a Cloud (canalDeSaida, mesma regra do
-      // enviarTextoWhatsApp). Desde 21/10/2026 todas as contas Cloud estão inativas e
+      // envio; o envio aborta se o canal mudar até lá). Desde 21/10/2026 todas as contas Cloud estão inativas e
       // tudo sai pelo WAHA — família marcada 'cloud' ou sem canal não pode mais virar
       // "janela fechada" (gerava alerta manual + transbordo à toa).
       const aberta = canalSaida !== 'cloud' || (await janelaAberta(supabase, tel))
@@ -525,23 +526,40 @@ export async function executarFollowup(agora: number = Date.now()) {
           triggerLog = `${triggerLog}_alerta`
         }
       } else {
+        // Pelo handler central (src/lib/canais): o canal relido tem de ser o mesmo
+        // que o portão e a janela avaliaram (canalEsperado), e a chave do toque
+        // impede o mesmo balão de sair duas vezes se o cron repetir este lead.
         const baloes = dividirEmBaloes(texto)
+        const num = (trigger === 'followup_pos_visita' ? toquesPosVisita : count) + 1
         for (let i = 0; i < baloes.length; i++) {
-          const r = await enviarProtegido(ctxEnvio, baloes[i], () =>
-            enviarTextoWhatsApp(tel, baloes[i], lead.familia?.whatsapp_phone_number_id)
-          )
+          let saida: Awaited<ReturnType<typeof enviarPeloCanal>> | null = null
+          const r = await enviarProtegido(ctxEnvio, baloes[i], async () => {
+            saida = await enviarPeloCanal({
+              operacao: 'followup',
+              telefone: tel,
+              familiaId: lead.familia_id,
+              leadId: lead.id,
+              phoneId: lead.familia?.whatsapp_phone_number_id,
+              texto: baloes[i],
+              canalEsperado: canalSaida,
+              chave: `followup:${lead.id}:${trigger}:${num}:${ultimaInteracaoMs ?? 0}:${i}`,
+            })
+            return saida.wid
+          })
           if (r.status !== 'enviado') {
             // Nada saiu neste balão. No 1º balão o toque inteiro fica para a próxima
             // rodada (não conta tentativa); depois do 1º, o que saiu já vale como toque.
             if (i === 0) barradoPeloPortao = `${r.status}_${r.motivo}`
             break
           }
-          const wid = r.wid
+          const s = saida as Awaited<ReturnType<typeof enviarPeloCanal>> | null
+          if (s?.duplicado) continue // este balão já saiu numa execução anterior
           await supabase.from('mensagens').insert({
             lead_id: lead.id,
             direcao: 'out_ia',
             conteudo: baloes[i],
-            whatsapp_message_id: wid,
+            whatsapp_message_id: r.wid,
+            ...(s ? carimboCanal(s) : {}),
           })
           if (i < baloes.length - 1) await sleep(900)
         }

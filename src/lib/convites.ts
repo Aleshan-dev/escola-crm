@@ -166,6 +166,7 @@ async function registrarConviteNoChat(
       direcao: 'out_ia',
       conteudo: `📝 Convite de pré-matrícula enviado\n\n${it.mensagem ?? ''}`,
       whatsapp_message_id: wid,
+      canal_whatsapp: canalNaoOficial(), // campanha: sai pelo canal de disparos
     })
   } catch (e) {
     console.error('[convites] registrarConviteNoChat falhou:', e instanceof Error ? e.message : e)

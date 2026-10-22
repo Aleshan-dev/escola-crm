@@ -1,5 +1,5 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarAvisoInterno } from '@/lib/canais/enviar'
 
 // Observabilidade: registra alertas do sistema e (opcionalmente) notifica o admin
 // no WhatsApp, com rate limit para não virar spam.
@@ -48,7 +48,7 @@ export async function registrarAlerta(
     const tel = cfg?.telefone_transbordo
     if (!tel) return
 
-    await enviarTextoWhatsApp(
+    await enviarAvisoInterno(
       tel,
       `🚨 *Alerta do sistema*\nContexto: ${contexto}\n${mensagem.slice(0, 300)}\n\nVerifique o CRM.`
     )

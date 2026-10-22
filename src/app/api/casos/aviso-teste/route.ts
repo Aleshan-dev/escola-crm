@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
 import { lerConfigCasos, textoAviso } from '@/lib/casos/servico'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarAvisoInterno } from '@/lib/canais/enviar'
 
 // Envia um aviso de Caso de EXEMPLO para o número configurado. É uma mensagem
 // REAL (sai pelo WhatsApp da escola). Limite de 3 por hora em memória da
@@ -32,7 +32,7 @@ export async function POST() {
   )
   try {
     envios.push(agora)
-    await enviarTextoWhatsApp(cfg.telefoneAviso, texto)
+    await enviarAvisoInterno(cfg.telefoneAviso, texto)
     return NextResponse.json({ ok: true })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Falha no envio' }, { status: 500 })

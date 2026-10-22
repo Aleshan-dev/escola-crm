@@ -30,11 +30,12 @@ export async function POST(req: NextRequest) {
     const JANELA = 'janela_fechada_sem_envio'
     let avisos: string[] = []
     try {
+      const canal = await canalDeSaida(tel, phoneId)
       const pr = await enviarProtegido(
-        { origem: 'manual', canal: await canalDeSaida(tel, phoneId), telefone: tel, leadId: lead_id, familiaId: lead.familia_id },
+        { origem: 'manual', canal, telefone: tel, leadId: lead_id, familiaId: lead.familia_id },
         texto,
         async () => {
-          r = await enviarTextoComFallback(tel, texto, { leadId: lead_id, phoneId })
+          r = await enviarTextoComFallback(tel, texto, { leadId: lead_id, phoneId, familiaId: lead.familia_id, canalEsperado: canal })
           if (!r.enviado) throw new Error(JANELA) // não saiu: o ledger registra 'falhou'
           return r.wid ?? null
         },
@@ -65,6 +66,7 @@ export async function POST(req: NextRequest) {
       direcao: 'out_humano',
       conteudo: texto,
       whatsapp_message_id: r.wid,
+      ...(r.canal ? { canal_whatsapp: r.canal, canal_ref: r.canalRef ?? null } : {}),
     })
     if (errMsg) {
       // 23505 = unique_violation em whatsapp_message_id: o ECHO desta mesma

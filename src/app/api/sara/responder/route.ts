@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
-import { canalDeSaida, enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { transporteDaConversa } from '@/lib/canais/enviar'
+import type { EnviarTexto } from '@/lib/atendimento'
 import { protegerEnviarTexto } from '@/lib/envio/portao'
 import { ehErroJanela, alertarEnvioManual } from '@/lib/janela'
 import { gerarRespostaSara } from '@/lib/sara'
@@ -33,15 +34,16 @@ export async function POST(req: NextRequest) {
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
   const fam = lead.familia
   // Portão de envio (src/lib/envio): conta no número e respeita opt-out/ritmo.
-  const enviarTexto = protegerEnviarTexto(
-    {
-      origem: 'resposta_ia',
-      canal: await canalDeSaida(fam.telefone, fam.whatsapp_phone_number_id),
-      leadId: lead_id,
-      familiaId: fam.id,
-    },
-    (tel, txt) => enviarTextoWhatsApp(tel, txt, fam.whatsapp_phone_number_id)
+  // Canal da conversa resolvido uma vez (src/lib/canais): o portão conta nele e
+  // cada mensagem gravada leva o carimbo dele.
+  const conversa = await transporteDaConversa({
+    telefone: fam.telefone, familiaId: fam.id, leadId: lead_id, phoneId: fam.whatsapp_phone_number_id,
+  })
+  const enviarTexto: EnviarTexto = protegerEnviarTexto(
+    { origem: 'resposta_ia', canal: conversa.canal, leadId: lead_id, familiaId: fam.id },
+    conversa.enviar
   )
+  enviarTexto.carimbo = conversa.carimbo
 
   // ── Família matriculada + Salomão ativo → quem responde é o SALOMÃO ──────────
   const { data: cfg } = await supabase.from('config_ia').select('salomao_ativo').eq('id', 1).maybeSingle()
@@ -105,6 +107,7 @@ export async function POST(req: NextRequest) {
           agente_origem: 'conversa',
           conteudo: baloes[i],
           whatsapp_message_id: wid,
+          ...conversa.carimbo,
         })
         if (i < baloes.length - 1) await sleep(900)
       }

@@ -8,7 +8,7 @@
  */
 import { createHash } from 'crypto'
 import type { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarAvisoInterno } from '@/lib/canais/enviar'
 import {
   ESTADOS_ABERTOS, TRANSICAO_EQUIPE, validarNota,
   type AcaoEquipe, type AgenteCaso, type EstadoCaso, type OrigemCaso, type PedidoAbertura,
@@ -298,7 +298,7 @@ export async function avisarEquipe(
     if (claimErr || !claim) return 'duplicado'
 
     try {
-      const wid = await enviarTextoWhatsApp(cfg.telefoneAviso, texto)
+      const wid = await enviarAvisoInterno(cfg.telefoneAviso, texto)
       await supabase.from('caso_avisos').update({ status: 'enviado', wid, enviado_em: new Date().toISOString() }).eq('id', claim.id)
       await supabase.from('caso_eventos').insert({ caso_id: caso.id, tipo: 'aviso_enviado', ator: 'sistema', detalhe: { tipo, chave } })
       return 'enviado'

@@ -6,7 +6,11 @@
 export type Canal = 'waha' | 'evolution' | 'cloud'
 
 /** Quem originou o envio. Define qual janela vale e se o teto do dia barra. */
-export type OrigemEnvio = 'resposta_ia' | 'followup' | 'salomao' | 'convite' | 'manual' | 'reengajar'
+/**
+ * `aviso_interno` = recado à EQUIPE (aviso de Caso, notificação ao gestor, alerta
+ * de sistema). Sai pelo mesmo chip, então entra na contagem, mas nunca é barrado.
+ */
+export type OrigemEnvio = 'resposta_ia' | 'followup' | 'salomao' | 'convite' | 'manual' | 'reengajar' | 'aviso_interno'
 
 /**
  * Canal com risco de banimento por volume. WAHA e Evolution são o WhatsApp
@@ -24,6 +28,7 @@ export const BAN_RISK: Record<Canal, boolean> = { waha: true, evolution: true, c
 export const ORIGEM_PROATIVA: Record<OrigemEnvio, boolean> = {
   resposta_ia: false,
   manual: false,
+  aviso_interno: false,
   followup: true,
   salomao: true,
   convite: true,
@@ -89,6 +94,7 @@ export const ORIGEM_CHECA_REPETICAO: Record<OrigemEnvio, boolean> = {
   salomao: false,
   convite: false,
   manual: false,
+  aviso_interno: false,
 }
 
 /** Espera máxima que um envio aceita aguardar o intervalo antes de virar `adiado`. */

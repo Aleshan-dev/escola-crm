@@ -23,7 +23,8 @@ import { aplicarMemoriaDoTurno, carregarMemoria } from '@/lib/memoria/servico'
 // não dá para contornar pelo lado da conversa.
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
-type EnviarTexto = (telefone: string, texto: string) => Promise<string | null>
+// Import só de tipo: atendimento.ts importa este módulo em runtime.
+type EnviarTexto = import('@/lib/atendimento').EnviarTexto
 
 const MAX_TENTATIVAS_CPF = 2
 
@@ -275,6 +276,7 @@ async function enviarERegistrar(
       agente_origem: 'conversa',
       conteudo: partes[i],
       whatsapp_message_id: wid,
+      ...(enviarTexto.carimbo ?? {}),
     })
     if (i < partes.length - 1) await sleep(900)
   }

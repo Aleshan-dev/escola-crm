@@ -5,6 +5,10 @@ import { interpretarMidia, salvarMidiaStorage } from '@/lib/midia'
 import { registrarAlerta } from '@/lib/alertas'
 import { processarMensagemRecebida, registrarMensagemManual, type EnviarTexto } from '@/lib/atendimento'
 import { registrarJanela } from '@/lib/janela'
+import { assinaturaMetaValida, registrarWebhook, resultadoDaIngestao } from '@/lib/canais/webhook'
+
+// Ordem de progressão dos recibos: só avança, nunca volta ('falhou' é o topo).
+const RANK_STATUS: Record<string, number> = { enviado: 1, entregue: 2, lido: 3, falhou: 4 }
 
 // Folga para baixar mídia + transcrever/descrever + janela de debounce (15s).
 export const maxDuration = 60
@@ -21,7 +25,16 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const supabase = createServerAdminClient()
   try {
-    const body = await req.json()
+    // Autenticidade: X-Hub-Signature-256 = HMAC do corpo BRUTO com o app secret.
+    // Sem o segredo no env a checagem fica desligada (e a trilha registra isso).
+    const bruto = await req.text()
+    const segredo = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET || ''
+    if (segredo && !assinaturaMetaValida(bruto, req.headers.get('x-hub-signature-256'), segredo)) {
+      await registrarWebhook(supabase, { canal: 'cloud', resultado: 'rejeitado', detalhe: 'assinatura X-Hub-Signature-256 inválida' })
+      await registrarAlerta(supabase, 'webhook/whatsapp-cloud', 'Webhook Cloud com assinatura inválida rejeitado (confira WHATSAPP_APP_SECRET/META_APP_SECRET).')
+      return NextResponse.json({ error: 'assinatura invalida' }, { status: 401 })
+    }
+    const body = JSON.parse(bruto)
     const change = body?.entry?.[0]?.changes?.[0]
     const field: string = change?.field || ''
     const value = change?.value
@@ -33,11 +46,17 @@ export async function POST(req: NextRequest) {
       const MAP: Record<string, string> = { sent: 'enviado', delivered: 'entregue', read: 'lido', failed: 'falhou' }
       for (const st of statuses) {
         if (!st?.id || !st?.status) continue
-        const upd: Record<string, unknown> = { status: MAP[st.status] || st.status }
+        const novo = MAP[st.status]
+        if (!novo) continue
+        const upd: Record<string, unknown> = { status: novo }
         if (st.status === 'failed') {
           upd.erro_envio = st?.errors?.[0]?.title || st?.errors?.[0]?.message || 'falha na entrega'
         }
-        await supabase.from('mensagens').update(upd).eq('whatsapp_message_id', st.id)
+        // Nunca rebaixa: recibos chegam fora de ordem (um 'delivered' tardio não desfaz 'read').
+        const anteriores = Object.keys(RANK_STATUS).filter((s) => RANK_STATUS[s] < RANK_STATUS[novo])
+        let q = supabase.from('mensagens').update(upd).eq('whatsapp_message_id', st.id)
+        q = anteriores.length ? q.or(`status.is.null,status.in.(${anteriores.join(',')})`) : q.is('status', null)
+        await q
       }
       return NextResponse.json({ ok: true, statuses: statuses.length })
     }
@@ -58,8 +77,12 @@ export async function POST(req: NextRequest) {
           echo?.[tipo]?.caption ||
           (tipo === 'texto' ? '' : `[${tipo}]`)
         try {
-          await registrarMensagemManual(supabase, { telefone: to, conteudo: conteudo || '[mensagem]', wid: echo?.id || '' })
-          await supabase.from('familias').update({ canal_whatsapp: 'cloud' }).eq('telefone', to)
+          const status = await registrarMensagemManual(supabase, {
+            telefone: to, conteudo: conteudo || '[mensagem]', wid: echo?.id || '', canal: 'cloud', canalRef: phoneNumberId || null,
+          })
+          await registrarWebhook(supabase, {
+            canal: 'cloud', canalRef: phoneNumberId, evento: 'echo', externalId: echo?.id, payload: echo, ...resultadoDaIngestao(status),
+          })
           n++
         } catch (e) {
           console.error('[whatsapp-cloud] echo falhou:', e instanceof Error ? e.message : e)
@@ -84,6 +107,7 @@ export async function POST(req: NextRequest) {
     // ── Mensagem RECEBIDA do responsável ─────────────────────────────────────
     const msg = value?.messages?.[0]
     if (!msg) return NextResponse.json({ ignored: true, field: field || 'sem_field' })
+    const trilha = { canal: 'cloud' as const, canalRef: phoneNumberId || null, evento: msg.type || 'message', externalId: msg.id, payload: body }
 
     // Conta ativa deste número, COM RETRY. Sob rajada esta consulta às vezes
     // falhava (erro transitório de conexão) ou voltava vazia mesmo com a conta
@@ -118,6 +142,7 @@ export async function POST(req: NextRequest) {
         ? `⚠️ FALHA ao ler a conta do WhatsApp Cloud após 3 tentativas (${contaErro}). POSSÍVEL PERDA de mensagem de ${msg.from} (phone_number_id ${phoneNumberId}) — confira o aparelho e responda manualmente se preciso.`
         : `Mensagem recebida no número Cloud DESATIVADO (phone_number_id ${phoneNumberId}, de ${msg.from}). O canal ativo é o Evolution — verifique se esse número da Meta ainda está divulgado em algum lugar.`
       await registrarAlerta(supabase, 'webhook/whatsapp-cloud', motivo)
+      await registrarWebhook(supabase, { ...trilha, resultado: contaErro ? 'erro' : 'descartado', detalhe: motivo })
       return NextResponse.json({ ignored: contaErro ? 'falha_consulta_conta' : 'canal cloud desativado' })
     }
 
@@ -177,6 +202,7 @@ export async function POST(req: NextRequest) {
       }
     } else {
       console.log('[whatsapp-cloud] tipo de mensagem ignorado:', msg.type)
+      await registrarWebhook(supabase, { ...trilha, resultado: 'descartado', detalhe: `tipo ${msg.type}` })
       return NextResponse.json({ ignored: `tipo ${msg.type}` })
     }
 
@@ -200,7 +226,7 @@ export async function POST(req: NextRequest) {
     // debounce de 15s roda sem segurar a resposta à Meta (evita reenvio/duplicação).
     after(async () => {
       try {
-        await processarMensagemRecebida(supabase, {
+        const status = await processarMensagemRecebida(supabase, {
           telefone,
           conteudo,
           pushName,
@@ -209,6 +235,7 @@ export async function POST(req: NextRequest) {
           tag: 'whatsapp-oficial',
           enviarTexto: enviarCloud,
           canalEnvio: 'cloud',
+          canalRef: phoneNumberId || null,
           canal: ref ? 'meta-ads' : 'organico',
           campanha: ref ? ref.headline || ref.source_id || null : null,
           referral: ref || null,
@@ -218,12 +245,13 @@ export async function POST(req: NextRequest) {
           // Mensagem citada (responder no WhatsApp) — respostas de Caso da equipe.
           citadoWid: msg.context?.id || null,
         })
-        // Canal do contato = Cloud (o lead escreveu pelo número oficial). Mantém o
-        // roteamento de saída seguindo o último canal usado pelo lead.
-        await supabase.from('familias').update({ canal_whatsapp: 'cloud' }).eq('telefone', telefone)
+        // O canal do contato (familias.canal_whatsapp = 'cloud') é carimbado dentro de
+        // processarMensagemRecebida, pela família — não pelo telefone cru.
+        await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
       } catch (e) {
         console.error('whatsapp-cloud (after) erro:', e instanceof Error ? e.message : String(e))
         await registrarAlerta(supabase, 'webhook/whatsapp-cloud', e instanceof Error ? e.message : String(e))
+        await registrarWebhook(supabase, { ...trilha, resultado: 'erro', detalhe: e instanceof Error ? e.message : String(e) })
       }
     })
 

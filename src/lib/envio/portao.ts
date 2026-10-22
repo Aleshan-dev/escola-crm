@@ -70,12 +70,12 @@ const VETO: MotivoBloqueio[] = ['opt_out', 'repeticao']
 const tipoDe = (m: MotivoBloqueio): 'vetado' | 'adiado' => (VETO.includes(m) ? 'vetado' : 'adiado')
 
 /**
- * O motivo BARRA esta origem (no modo ativo)? Manual nunca. Resposta da IA só por
+ * O motivo BARRA esta origem (no modo ativo)? Manual e aviso interno nunca. Resposta da IA só por
  * opt-out: o cliente acabou de escrever, e silêncio por "repetição" ou "intervalo"
  * é pior que o risco — esses viram registro. Proativas: todos barram.
  */
 export function motivoBarra(origem: OrigemEnvio, motivo: MotivoBloqueio): boolean {
-  if (origem === 'manual') return false
+  if (origem === 'manual' || origem === 'aviso_interno') return false
   if (origem === 'resposta_ia') return motivo === 'opt_out'
   return true
 }
@@ -98,7 +98,7 @@ export class EnvioBarradoError extends Error {
 export async function preChecarEnvio(
   ctx: ContextoEnvio, deps: PortaoDeps = depsPadrao,
 ): Promise<{ ok: true } | { ok: false; status: 'adiado' | 'vetado'; motivo: MotivoBloqueio }> {
-  if (deps.modo() !== 'ativo' || ctx.origem === 'manual') return { ok: true }
+  if (deps.modo() !== 'ativo' || ctx.origem === 'manual' || ctx.origem === 'aviso_interno') return { ok: true }
   try {
     if (await deps.optOut(ctx)) return { ok: false, status: 'vetado', motivo: 'opt_out' }
     const cfg = await deps.config(ctx.canal)

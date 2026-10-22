@@ -13,7 +13,7 @@ import { gerarRespostaSara } from '@/lib/sara'
 import { gerarRespostaSalomaoLLM } from '@/lib/salomao'
 import { dividirEmBaloes } from '@/lib/baloes'
 import { sleep } from '@/lib/pacing'
-import { canalDeSaida, enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { transporteDaConversa } from '@/lib/canais/enviar'
 import { protegerEnviarTexto } from '@/lib/envio/portao'
 import { instrucaoRetorno } from './regras'
 import type { Caso } from './servico'
@@ -73,11 +73,12 @@ export async function executarRetornoCaso(casoId: string, supabase: SupaAdmin = 
       texto = r.resposta
     }
 
-    const phoneId = familia.whatsapp_phone_number_id
-    const canal = await canalDeSaida(familia.telefone, phoneId)
+    const conversa = await transporteDaConversa({
+      telefone: familia.telefone, familiaId: familia.id, leadId: caso.lead_id, phoneId: familia.whatsapp_phone_number_id,
+    })
     const enviar = protegerEnviarTexto(
-      { origem: 'resposta_ia', canal, leadId: caso.lead_id, familiaId: familia.id },
-      (tel, txt) => enviarTextoWhatsApp(tel, txt, phoneId)
+      { origem: 'resposta_ia', canal: conversa.canal, leadId: caso.lead_id, familiaId: familia.id },
+      conversa.enviar
     )
     const baloes = dividirEmBaloes(texto)
     for (let i = 0; i < baloes.length; i++) {
@@ -89,6 +90,7 @@ export async function executarRetornoCaso(casoId: string, supabase: SupaAdmin = 
         agente_origem: 'conversa',
         conteudo: baloes[i],
         whatsapp_message_id: wid,
+        ...conversa.carimbo,
       })
       if (i < baloes.length - 1) await sleep(900)
     }

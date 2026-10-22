@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
-import { canalDeSaida, enviarTemplateWhatsApp, enviarTextoWhatsApp, corpoTemplate } from '@/lib/whatsapp-cloud'
+import { enviarTemplateWhatsApp, corpoTemplate } from '@/lib/whatsapp-cloud'
+import { transporteDaConversa } from '@/lib/canais/enviar'
 import { enviarProtegido } from '@/lib/envio/portao'
 
 // Envia o template aprovado "retomada_lead" para um lead com a janela de 24h fechada.
@@ -29,30 +30,19 @@ export async function POST(req: NextRequest) {
     const tel = fam.telefone
     // Portão de envio (src/lib/envio): retomada é proativa — opt-out, janela de
     // disparo, teto do dia e ritmo do número valem.
+    const familiaId = (lead as { familia_id?: string } | null)?.familia_id ?? null
+    const conversa = await transporteDaConversa({
+      telefone: tel, familiaId, leadId: lead_id, phoneId: fam.whatsapp_phone_number_id, operacao: 'followup',
+    })
     const r = await enviarProtegido(
-      {
-        origem: 'reengajar',
-        canal: await canalDeSaida(tel, fam.whatsapp_phone_number_id),
-        telefone: tel,
-        leadId: lead_id,
-        familiaId: (lead as { familia_id?: string } | null)?.familia_id ?? null,
-      },
+      { origem: 'reengajar', canal: conversa.canal, telefone: tel, leadId: lead_id, familiaId },
       texto,
-      async () => {
-        try {
-          return await enviarTemplateWhatsApp(
-            tel,
-            'retomada_lead',
-            'pt_BR',
-            [fam.nome_responsavel || 'família'],
-            fam.whatsapp_phone_number_id
-          )
-        } catch {
-          // Sem conta Cloud ativa (ou template indisponível): via Evolution o texto
-          // livre entrega a qualquer hora — mesmo conteúdo do template aprovado.
-          return await enviarTextoWhatsApp(tel, texto, fam.whatsapp_phone_number_id)
-        }
-      }
+      // Template só quando a conversa é na Cloud (fora da janela de 24h ele é o
+      // único jeito). Conversa no WAHA/Evolution recebe o mesmo texto, livre, pelo
+      // próprio canal — nunca um template saindo de OUTRO número.
+      () => conversa.canal === 'cloud'
+        ? enviarTemplateWhatsApp(tel, 'retomada_lead', 'pt_BR', [fam.nome_responsavel || 'família'], fam.whatsapp_phone_number_id)
+        : conversa.enviar(tel, texto)
     )
     if (r.status !== 'enviado') {
       return NextResponse.json(
@@ -65,6 +55,7 @@ export async function POST(req: NextRequest) {
       lead_id, direcao: 'out_ia',
       conteudo: texto,
       whatsapp_message_id: wid,
+      ...conversa.carimbo,
     })
     // Zera a flag e marca o toque (sai da lista de reengajáveis por 2 dias).
     await admin.from('leads').update({ precisa_template: false, ultimo_followup_em: new Date().toISOString() }).eq('id', lead_id)

@@ -20,30 +20,25 @@ import { aplicarCasosDoTurno } from '@/lib/casos/turno'
 import { aplicarMemoriaDoTurno } from '@/lib/memoria/servico'
 import { INSTRUCAO_REFORCO, detectaPromessaHumana, modoGuarda } from '@/lib/casos/guarda-promessa'
 import { validarAbertura } from '@/lib/casos/regras'
+import { normalizarCelular } from '@/lib/telefone'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
 
-/**
- * Normaliza um telefone para a CHAVE DE IDENTIDADE do contato — espelho fiel de
- * crm.fn_normalizar_celular (o trigger que preenche familias.telefone_norm). Usar
- * a mesma regra aqui garante que o casamento de família encontre o contato já
- * existente, independentemente do formato que chegou (+55…, 55…, com/sem o 9º
- * dígito). A identidade é o NÚMERO; não deduplicar por isto foi o que duplicou
- * leads do mesmo responsável.
- */
-export function normalizarCelular(raw: string): string {
-  let d = (raw || '').replace(/\D/g, '')
-  if (d.length > 11 && d.startsWith('55')) d = d.slice(2)
-  if (d.length === 10) d = d.slice(0, 2) + '9' + d.slice(2)
-  if (d.length === 11) return d
-  return d.slice(-11)
-}
+// Chave de identidade do contato (espelho de crm.fn_normalizar_celular). Mora em
+// src/lib/telefone.ts; reexportado aqui para os importadores antigos.
+export { normalizarCelular }
 
-/** Envia um texto pelo canal e devolve o id da mensagem (ou null). */
-export type EnviarTexto = (telefone: string, texto: string) => Promise<string | null>
+/** Canal físico de uma mensagem, gravado junto na linha de crm.mensagens. */
+export type CarimboCanal = { canal_whatsapp: Canal; canal_ref: string | null }
+
+/**
+ * Envia um texto pelo canal e devolve o id da mensagem (ou null). `carimbo`
+ * (opcional) diz por qual canal ele sai, para quem grava a mensagem enviada.
+ */
+export type EnviarTexto = ((telefone: string, texto: string) => Promise<string | null>) & { carimbo?: CarimboCanal }
 
 // Mora em src/lib/baloes.ts (o retorno dos Casos também usa); reexportado aqui
 // para os importadores antigos.
@@ -119,9 +114,9 @@ async function juntarBaloesRecebidos(
  */
 export async function registrarMensagemManual(
   supabase: SupaAdmin,
-  params: { telefone: string; conteudo: string; wid: string }
+  params: { telefone: string; conteudo: string; wid: string; canal?: Canal; canalRef?: string | null }
 ): Promise<string> {
-  const { telefone, conteudo, wid } = params
+  const { telefone, conteudo, wid, canal, canalRef } = params
 
   if (wid) {
     const { data: jaExiste } = await supabase
@@ -157,7 +152,10 @@ export async function registrarMensagemManual(
     agente_origem: 'conversa',
     conteudo,
     whatsapp_message_id: wid || null,
+    ...(canal ? { canal_whatsapp: canal, canal_ref: canalRef ?? null } : {}),
   })
+  // A conversa segue no canal por onde a equipe respondeu.
+  if (canal) await supabase.from('familias').update({ canal_whatsapp: canal }).eq('id', fam.id)
 
   if (lead.ia_ativa) {
     await supabase.from('leads').update({ ia_ativa: false }).eq('id', lead.id)
@@ -192,13 +190,16 @@ export async function processarMensagemRecebida(
     phoneNumberId?: string | null // número oficial da escola que recebeu a mensagem
     tipoMidia?: string // 'texto' | 'imagem' | 'audio' | 'documento' | 'video'
     urlMidia?: string | null // caminho do arquivo no storage (bucket 'midias')
-    /** Número físico por onde a resposta sai — liga o portão de envio (src/lib/envio). */
+    /** Número físico por onde a mensagem chegou e a resposta sai — liga o portão de envio (src/lib/envio). */
     canalEnvio?: Canal
+    /** Conexão no provedor (sessão WAHA, phone_number_id, instância Evolution) — carimbo da mensagem. */
+    canalRef?: string | null
     /** Id da mensagem que esta cita (responder no WhatsApp) — usado pelas respostas de Caso. */
     citadoWid?: string | null
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio, citadoWid } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio, canalRef, citadoWid } = params
+  const carimbo: CarimboCanal | null = canalEnvio ? { canal_whatsapp: canalEnvio, canal_ref: canalRef ?? null } : null
 
   // Idempotência: se este wid já foi processado (retry do webhook / upsert duplicado),
   // não registra de novo nem roda a Sara — evita respostas duplicadas. Rede de
@@ -289,6 +290,11 @@ export async function processarMensagemRecebida(
   if (phoneNumberId) {
     await supabase.from('familias').update({ whatsapp_phone_number_id: phoneNumberId }).eq('id', familia.id)
   }
+  // Canal da conversa = onde o lead acabou de escrever. É o que a política de
+  // saída (src/lib/canais) usa para responder, follow-up e envio manual.
+  if (canalEnvio) {
+    await supabase.from('familias').update({ canal_whatsapp: canalEnvio }).eq('id', familia.id)
+  }
 
   let { data: lead } = await supabase
     .from('leads')
@@ -333,6 +339,7 @@ export async function processarMensagemRecebida(
     whatsapp_message_id: wid,
     tipo_midia: tipoMidia || 'texto',
     url_midia: urlMidia || null,
+    ...(carimbo ?? {}),
   }).select('id, criado_em').single()
   const msgInId: string | null = msgInserida?.id ?? null
   const msgInCriadoEm: string | null = msgInserida?.criado_em ?? null
@@ -572,6 +579,8 @@ export async function processarMensagemRecebida(
           }
           return enviarNoCanal(telefone, texto)
         }
+  // O Salomão grava as próprias mensagens: leva o canal junto no envio.
+  if (carimbo) enviarValidado.carimbo = carimbo
 
   // Responsável MATRICULADO + Salomão ativo => Salomão atende (nunca a Sara).
   // Respeita ADR-005: pausa manual (ia_ativa=false) e transbordo valem igual.
@@ -704,6 +713,7 @@ export async function processarMensagemRecebida(
           agente_origem: 'conversa',
           conteudo: baloes[i],
           whatsapp_message_id: sentId,
+          ...(carimbo ?? {}),
         })
         if (i < baloes.length - 1) await sleep(900)
       }

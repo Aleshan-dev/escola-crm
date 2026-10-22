@@ -120,6 +120,13 @@ export async function evolutionSendMedia(
   return provider() === 'waha' ? wahaSendMedia(numero, opts) : evoSendMedia(numero, opts)
 }
 
+// ── Transporte Evolution DIRETO (ignora a flag) ───────────────────────────────
+// Para o roteamento de canais (src/lib/canais): uma conversa que entrou pelo
+// Evolution responde pelo Evolution, mesmo com a flag de disparos em 'waha'.
+export const evolutionDiretoSendText = evoSendText
+export const evolutionDiretoSendMedia = evoSendMedia
+export const evolutionDiretoConfigurado = evoConfigurado
+
 export async function evolutionConnectionState(): Promise<{ ok: boolean; payload: unknown; erro?: string }> {
   return provider() === 'waha' ? wahaConnectionState() : evoConnectionState()
 }

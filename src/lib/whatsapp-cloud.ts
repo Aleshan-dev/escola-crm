@@ -58,7 +58,7 @@ type Conta = { phone_number_id: string; token: string }
 
 // Resolve a conta Cloud a usar: a do número pelo qual o lead chegou (multi-número)
 // ou a conta ativa mais recente.
-async function resolverConta(phoneId?: string | null): Promise<Conta | null> {
+export async function resolverContaCloud(phoneId?: string | null): Promise<Conta | null> {
   const { createServerAdminClient } = await import('@/lib/supabase-server')
   const supabase = createServerAdminClient()
 
@@ -81,74 +81,22 @@ async function resolverConta(phoneId?: string | null): Promise<Conta | null> {
   return data
 }
 
-// Envio unificado: usa a conta Cloud ativa (banco) ou o env como fallback.
-// Retorna o id da mensagem (wid) ou null. Ponto único de saída do WhatsApp.
-// Canal do contato: 'waha' quando o lead conversa pelo número WAHA (não-oficial).
-// Setado pelos webhooks de entrada (pelo canal onde o lead escreveu). Roteia a
-// SAÍDA para o mesmo número — senão a resposta sai por um número diferente do
-// que o lead usou. null/'cloud' = Cloud API (atendimento oficial).
-async function contatoUsaWaha(to: string): Promise<boolean> {
-  try {
-    const { createServerAdminClient } = await import('@/lib/supabase-server')
-    const supabase = createServerAdminClient()
-    const { data } = await supabase
-      .from('familias')
-      .select('canal_whatsapp')
-      .eq('telefone', to)
-      .maybeSingle<{ canal_whatsapp: string | null }>()
-    return data?.canal_whatsapp === 'waha'
-  } catch {
-    return false
-  }
-}
+// A escolha do canal de saída (WAHA, Cloud, Evolution) mora em src/lib/canais:
+// política por operação, sem fallback entre números. Aqui ficam só os
+// transportes da Cloud.
 
 /**
- * Canal físico por onde `enviarTextoWhatsApp(to, …, phoneId)` vai sair — mesma
- * regra de roteamento dele. Usado pelo portão de envio (src/lib/envio) para
- * contar ritmo e teto no número certo.
+ * Canal da conversa com este contato — o mesmo que `enviarPeloCanal` usaria.
+ * Para o portão de envio (src/lib/envio) contar ritmo e teto no número certo.
  */
 export async function canalDeSaida(to: string, phoneId?: string | null): Promise<'waha' | 'cloud' | 'evolution'> {
-  if (await contatoUsaWaha(to)) return 'waha'
-  const conta = await resolverConta(phoneId)
-  if (conta?.phone_number_id && conta?.token) return 'cloud'
-  const { canalNaoOficial } = await import('@/lib/evolution')
-  return canalNaoOficial()
-}
-
-export async function enviarTextoWhatsApp(
-  to: string,
-  texto: string,
-  phoneId?: string | null,
-): Promise<string | null> {
-  // Roteamento por canal: contato do WAHA responde PELO WAHA (mesmo número que
-  // ele usou). WAHA não tem janela de 24h — envia direto.
-  if (await contatoUsaWaha(to)) {
-    const { wahaSendText } = await import('@/lib/waha')
-    const sent = await wahaSendText(to, texto)
-    return sent?.key?.id || null
-  }
-
-  // Canal Cloud oficial: SOMENTE quando há conta Cloud ATIVA no banco.
-  // O fallback por env (WHATSAPP_PHONE_NUMBER_ID/TOKEN) foi removido de propósito:
-  // um número Cloud encostado com token expirado no env reintroduzia o canal morto
-  // e derrubava a saída com erro 100/33 da Meta ("Object ... does not exist"), em
-  // vez de cair no Evolution. Sem conta ativa, a saída vai pelo Evolution (canal ativo).
-  const conta = await resolverConta(phoneId)
-  if (conta?.phone_number_id && conta?.token) {
-    const sent = await enviarTextoCloudConta(conta.phone_number_id, conta.token, to, texto)
-    return sent?.messages?.[0]?.id || null
-  }
-
-  // Sem conta Cloud ativa: o número está conectado via Evolution -> envia pelo Evolution.
-  const { evolutionSendText } = await import('@/lib/evolution')
-  const sent = await evolutionSendText(to, texto)
-  return sent?.key?.id || null
+  const { resolverCanal } = await import('@/lib/canais/enviar')
+  return (await resolverCanal({ operacao: 'resposta', telefone: to, phoneId })).canal
 }
 
 // ============================================================================
 // Envio de MÍDIA (documento/imagem) pela equipe, a partir do chat do CRM.
-// Mesmo ponto único de saída do texto: usa a conta Cloud ativa (banco) se houver,
-// senão cai no Evolution (celular via coexistência — o canal ativo hoje).
+// Mesmo roteamento do texto: sai pelo canal da conversa (src/lib/canais).
 // ============================================================================
 
 export type MidiaSaida = {
@@ -208,51 +156,13 @@ async function cloudSendMedia(
   return j?.messages?.[0]?.id || null
 }
 
-/**
- * Envia uma mídia (documento/imagem/...) para o contato. Devolve o wid e o
- * `tipo_midia` a gravar no histórico. Lança em erro (o chamador trata janela etc.).
- */
-export async function enviarMidiaWhatsApp(
-  to: string,
-  midia: MidiaSaida,
-  phoneId?: string | null,
-): Promise<{ wid: string | null; tipo: 'imagem' | 'video' | 'audio' | 'documento' }> {
-  const { kind, tipo } = classificarMidia(midia.mimetype)
-
-  // Roteamento por canal: contato do WAHA recebe a mídia PELO WAHA (mesmo número).
-  if (await contatoUsaWaha(to)) {
-    if (!midia.url) throw new Error('Envio de mídia por WAHA requer URL da mídia')
-    const { wahaSendMedia } = await import('@/lib/waha')
-    const sent = await wahaSendMedia(to, {
-      media: midia.url,
-      fileName: midia.filename,
-      caption: midia.caption,
-      mediatype: kind,
-      mimetype: midia.mimetype,
-    })
-    return { wid: sent?.key?.id || null, tipo }
-  }
-
-  // Canal Cloud oficial: SOMENTE quando há conta Cloud ATIVA no banco (mesma
-  // regra do texto). Sem fallback de env — ver enviarTextoWhatsApp acima.
-  const conta = await resolverConta(phoneId)
-  if (conta?.phone_number_id && conta?.token) {
-    const mediaId = await cloudUploadMedia(conta.phone_number_id, conta.token, midia.base64, midia.mimetype, midia.filename)
-    const wid = await cloudSendMedia(conta.phone_number_id, conta.token, to, kind, mediaId, midia.filename, midia.caption)
-    return { wid, tipo }
-  }
-
-  // Sem canal Cloud: envia pelo Evolution (baixa a partir da URL assinada).
-  if (!midia.url) throw new Error('Envio por Evolution requer URL da mídia')
-  const { evolutionSendMedia } = await import('@/lib/evolution')
-  const sent = await evolutionSendMedia(to, {
-    media: midia.url,
-    fileName: midia.filename,
-    caption: midia.caption,
-    mediatype: kind,
-    mimetype: midia.mimetype,
-  })
-  return { wid: sent?.key?.id || null, tipo }
+/** Mídia por uma conta Cloud específica (upload → envio). Devolve o wid. */
+export async function enviarMidiaCloudConta(
+  phoneId: string, token: string, to: string, midia: MidiaSaida,
+): Promise<string | null> {
+  const { kind } = classificarMidia(midia.mimetype)
+  const mediaId = await cloudUploadMedia(phoneId, token, midia.base64, midia.mimetype, midia.filename)
+  return cloudSendMedia(phoneId, token, to, kind, mediaId, midia.filename, midia.caption)
 }
 
 // Texto renderizado dos templates aprovados — para gravar no histórico do CRM o que a
@@ -279,7 +189,7 @@ export async function enviarTemplateWhatsApp(
   variaveis: string[],
   phoneId?: string | null,
 ): Promise<string | null> {
-  const conta = await resolverConta(phoneId)
+  const conta = await resolverContaCloud(phoneId)
   if (!conta?.token) throw new Error('Sem conta Cloud ativa para enviar template')
 
   const components = variaveis.length

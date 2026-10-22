@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { wahaSendText, resolverContatoWaha } from '@/lib/waha'
+import { wahaSendText, resolverContatoWaha, getWahaConfig } from '@/lib/waha'
 import { registrarAlerta } from '@/lib/alertas'
 import {
   processarMensagemRecebida,
@@ -8,6 +8,8 @@ import {
   type EnviarTexto,
 } from '@/lib/atendimento'
 import { extrairConteudoMidiaWaha } from '@/lib/midia'
+import { normalizarCelular } from '@/lib/telefone'
+import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere } from '@/lib/canais/webhook'
 
 // Webhook de ENTRADA do WAHA (canal de disparos). Espelha o /api/webhook/whatsapp
 // (Evolution), mas no formato de eventos do WAHA:
@@ -22,6 +24,8 @@ import { extrairConteudoMidiaWaha } from '@/lib/midia'
 //
 // Registro do webhook no WAHA: ver /api/waha/webhook-register (ou o botão na tela).
 // Middleware libera /api/webhook/* sem sessão; opcionalmente exige ?secret=<WAHA_WEBHOOK_SECRET>.
+// Evento de OUTRA sessão WAHA é rejeitado (não é a conexão que configuramos).
+// Toda mensagem fica na trilha crm.webhook_eventos (src/lib/canais/webhook.ts).
 
 export const maxDuration = 60
 
@@ -47,7 +51,8 @@ export async function POST(req: NextRequest) {
 
   // Segurança opcional: se WAHA_WEBHOOK_SECRET existir, exige ?secret= na URL.
   const secret = process.env.WAHA_WEBHOOK_SECRET
-  if (secret && new URL(req.url).searchParams.get('secret') !== secret) {
+  if (secret && !segredoConfere(new URL(req.url).searchParams.get('secret'), secret)) {
+    await registrarWebhook(supabase, { canal: 'waha', resultado: 'rejeitado', detalhe: 'secret inválido' })
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
@@ -55,6 +60,24 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const event: string = body?.event || ''
     const p = body?.payload || {}
+    const sessao: string | null = typeof body?.session === 'string' ? body.session : null
+
+    // Evento de OUTRA sessão (outro chip apontando para esta URL): não entra na
+    // conversa — a resposta sairia pela sessão configurada, um número diferente do
+    // que o lead usou. Fica na trilha com o payload (dá para reprocessar) e vira
+    // alerta. 200 para o WAHA não reenviar.
+    const { session: sessaoConfigurada } = await getWahaConfig()
+    if (!conexaoConfere(sessao, sessaoConfigurada)) {
+      if (event !== 'message.ack') {
+        await registrarWebhook(supabase, {
+          canal: 'waha', canalRef: sessao, evento: event, externalId: widDe(p?.id), resultado: 'rejeitado',
+          detalhe: `sessão ${sessao} ≠ configurada ${sessaoConfigurada}`, payload: body,
+        })
+        await registrarAlerta(supabase, 'webhook/waha', `Evento da sessão WAHA "${sessao}", mas a configurada é "${sessaoConfigurada}". Mensagem NÃO entrou no CRM (ver crm.webhook_eventos).`)
+      }
+      return NextResponse.json({ ignored: 'sessao diferente da configurada', sessao })
+    }
+    const canalRef = sessao || sessaoConfigurada
 
     // ── Recibos de entrega (ack): entregue (✓✓) / lido (✓✓ azul) ──────────────
     // O WAHA emite 'message.ack' para as mensagens que ENVIAMOS. Níveis:
@@ -85,10 +108,12 @@ export async function POST(req: NextRequest) {
     if (event !== 'message' && event !== 'message.any') {
       return NextResponse.json({ ignored: event })
     }
+    const trilha = { canal: 'waha' as const, canalRef, evento: event, externalId: widDe(p?.id), payload: body }
 
     const from: string = p?.from || ''
     // Ignora grupos, status/stories e newsletters.
     if (!from || from.includes('@g.us') || from.includes('@broadcast') || from.includes('@newsletter')) {
+      await registrarWebhook(supabase, { ...trilha, resultado: 'descartado', detalhe: 'grupo/status/sem from' })
       return NextResponse.json({ ignored: 'grupo/status/sem from' })
     }
 
@@ -102,6 +127,7 @@ export async function POST(req: NextRequest) {
     // diferentes e criava contatos-fantasma. Registra alerta para reprocesso manual.
     if (!telefone) {
       await registrarAlerta(supabase, 'webhook/waha', `LID não resolvido para número: ${from}`)
+      await registrarWebhook(supabase, { ...trilha, resultado: 'descartado', detalhe: `LID não resolvido: ${from}` })
       return NextResponse.json({ ignored: 'lid-sem-numero', from })
     }
 
@@ -112,8 +138,8 @@ export async function POST(req: NextRequest) {
     // fromMe: mensagem saída do próprio número (Sara via API ou resposta manual no celular).
     if (p?.fromMe === true) {
       const conteudoOut = texto || '[mídia]'
-      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid })
-      await supabase.from('familias').update({ canal_whatsapp: 'waha' }).eq('telefone', telefone)
+      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid, canal: 'waha', canalRef })
+      await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
       return NextResponse.json({ ok: true, fromMe: status })
     }
 
@@ -136,7 +162,7 @@ export async function POST(req: NextRequest) {
             '[O responsável enviou uma mídia que não consigo abrir por aqui. Agradeça com gentileza e, se parecer importante, peça para reenviar como texto. NÃO presuma o assunto — em especial, NÃO trate como comprovante de pagamento.]'
         }
 
-        await processarMensagemRecebida(supabase, {
+        const status = await processarMensagemRecebida(supabase, {
           telefone,
           conteudo,
           pushName,
@@ -145,6 +171,7 @@ export async function POST(req: NextRequest) {
           tag: 'whatsapp',
           enviarTexto: enviarWaha,
           canalEnvio: 'waha',
+          canalRef,
           canal: 'organico',
           tipoMidia,
           urlMidia,
@@ -152,22 +179,22 @@ export async function POST(req: NextRequest) {
           // WAHA traz o id curto em replyTo.id (o motor WEBJS também em _data).
           citadoWid: p?.replyTo?.id || p?._data?.quotedStanzaID || null,
         })
-        // Marca o canal do contato: a saída (manual e automática) deve sair pelo
-        // WAHA — o mesmo número onde o lead escreveu. (Diferente do `canal` acima,
-        // que é atribuição de marketing.)
-        await supabase.from('familias').update({ canal_whatsapp: 'waha' }).eq('telefone', telefone)
+        // O canal do contato (familias.canal_whatsapp = 'waha') é carimbado dentro de
+        // processarMensagemRecebida, pela família — não pelo telefone cru.
+        await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
 
         // Corrige o nome de leads que ficaram como "Família" (criados antes de
         // termos o nome do WhatsApp). Só sobrescreve o placeholder, nunca um nome real.
         if (nome) {
           await supabase.from('familias')
             .update({ nome_responsavel: nome })
-            .eq('telefone', telefone)
+            .eq('telefone_norm', normalizarCelular(telefone))
             .or('nome_responsavel.is.null,nome_responsavel.eq.Família')
         }
       } catch (e) {
         console.error('Webhook WAHA (after) erro:', e)
         await registrarAlerta(supabase, 'webhook/waha', e instanceof Error ? e.message : String(e))
+        await registrarWebhook(supabase, { ...trilha, resultado: 'erro', detalhe: e instanceof Error ? e.message : String(e) })
       }
     })
 

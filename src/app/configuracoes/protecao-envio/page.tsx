@@ -48,7 +48,7 @@ const MOTIVO: Record<string, string> = {
 const STATUS: Record<string, string> = { vetado: 'Vetado', adiado: 'Adiado', vetaria: 'Teria barrado' }
 const ORIGEM: Record<string, string> = {
   resposta_ia: 'Resposta da IA', followup: 'Follow-up', salomao: 'Salomão', convite: 'Convites',
-  manual: 'Manual', reengajar: 'Retomada',
+  manual: 'Manual', reengajar: 'Retomada', aviso_interno: 'Aviso à equipe',
 }
 
 // Form: string vazia = "usar o padrão".

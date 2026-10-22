@@ -1,5 +1,6 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarPeloCanal } from '@/lib/canais/enviar'
+import type { Canal } from '@/lib/canais/tipos'
 import { registrarAlerta } from '@/lib/alertas'
 
 // ============================================================================
@@ -140,11 +141,16 @@ export async function alertarEnvioManual(opts: {
 export async function enviarTextoComFallback(
   to: string,
   texto: string,
-  ctx?: { nome?: string; leadId?: string | null; phoneId?: string | null }
-): Promise<{ enviado: boolean; wid?: string | null; janelaFechada?: boolean; alertaCriado?: boolean }> {
+  ctx?: { nome?: string; leadId?: string | null; phoneId?: string | null; familiaId?: string | null; canalEsperado?: Canal | null }
+): Promise<{
+  enviado: boolean; wid?: string | null; canal?: Canal; canalRef?: string | null; janelaFechada?: boolean; alertaCriado?: boolean
+}> {
   try {
-    const wid = await enviarTextoWhatsApp(to, texto, ctx?.phoneId)
-    return { enviado: true, wid }
+    const r = await enviarPeloCanal({
+      operacao: 'manual', telefone: to, texto, phoneId: ctx?.phoneId, familiaId: ctx?.familiaId,
+      leadId: ctx?.leadId, canalEsperado: ctx?.canalEsperado,
+    })
+    return { enviado: true, wid: r.wid, canal: r.canal, canalRef: r.canalRef }
   } catch (e) {
     if (!ehErroJanela(e)) throw e
     const r = await alertarEnvioManual({ telefone: to, texto, nome: ctx?.nome, leadId: ctx?.leadId })

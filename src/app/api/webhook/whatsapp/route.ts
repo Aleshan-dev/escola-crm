@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { canalNaoOficial, cleanWhatsappJid, evolutionSendText } from '@/lib/evolution'
+import { cleanWhatsappJid, evolutionDiretoSendText } from '@/lib/evolution'
 import { registrarAlerta } from '@/lib/alertas'
 import {
   processarMensagemRecebida,
@@ -8,6 +8,7 @@ import {
   type EnviarTexto,
 } from '@/lib/atendimento'
 import { extrairConteudoMidia } from '@/lib/midia'
+import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere } from '@/lib/canais/webhook'
 
 // Dá folga para baixar mídia + transcrever/descrever + janela de debounce (15s).
 export const maxDuration = 60
@@ -16,8 +17,12 @@ export async function GET() {
   return NextResponse.json({ ok: true, msg: 'Webhook escola-crm online' })
 }
 
+// A mensagem chegou pela instância Evolution → a resposta sai por ELA, direto,
+// independente da flag WHATSAPP_PROVIDER (que só escolhe o canal dos disparos).
+// Antes, com a flag em 'waha', a resposta a um lead do Evolution saía pelo WAHA —
+// outro número.
 const enviarEvolution: EnviarTexto = async (telefone, texto) => {
-  const sent = await evolutionSendText(telefone, texto)
+  const sent = await evolutionDiretoSendText(telefone, texto)
   return sent?.key?.id || null
 }
 
@@ -99,10 +104,22 @@ async function processarStatusNaoOficial(supabase: SupaAdmin, event: string, dat
 export async function POST(req: NextRequest) {
   const supabase = createServerAdminClient()
 
+  // Segurança opcional: com EVOLUTION_WEBHOOK_SECRET, exige ?secret= ou o cabeçalho apikey.
+  const secret = process.env.EVOLUTION_WEBHOOK_SECRET
+  if (secret) {
+    const recebido = new URL(req.url).searchParams.get('secret') || req.headers.get('apikey')
+    if (!segredoConfere(recebido, secret)) {
+      await registrarWebhook(supabase, { canal: 'evolution', resultado: 'rejeitado', detalhe: 'secret inválido' })
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+    }
+  }
+
   try {
     const body = await req.json()
     const event = body.event
     const data = body.data
+    const instancia: string | null = typeof body?.instance === 'string' ? body.instance : null
+    const instanciaConfigurada = process.env.EVOLUTION_INSTANCE_NAME || null
 
     // ── Recibos de entrega (canal não-oficial) ───────────────────────────────
     // Evolution emite `messages.update`; o WAHA emite `message.ack`. Ambos passam
@@ -117,9 +134,21 @@ export async function POST(req: NextRequest) {
     if (event !== 'messages.upsert' && event !== 'MESSAGES_UPSERT') {
       return NextResponse.json({ ignored: event })
     }
+    const canalRef = instancia || instanciaConfigurada
+    const trilha = { canal: 'evolution' as const, canalRef, evento: String(event), externalId: data?.key?.id, payload: body }
+
+    // Mensagem de OUTRA instância: a resposta sairia pela instância configurada (outro número).
+    if (!conexaoConfere(instancia, instanciaConfigurada)) {
+      await registrarWebhook(supabase, { ...trilha, resultado: 'rejeitado', detalhe: `instância ${instancia} ≠ configurada ${instanciaConfigurada}` })
+      await registrarAlerta(supabase, 'webhook/whatsapp', `Evento da instância Evolution "${instancia}", mas a configurada é "${instanciaConfigurada}". Mensagem NÃO entrou no CRM.`)
+      return NextResponse.json({ ignored: 'instancia diferente da configurada' })
+    }
 
     const jid: string = data?.key?.remoteJid || ''
-    if (!jid || jid.includes('@g.us')) return NextResponse.json({ ignored: 'group ou sem jid' })
+    if (!jid || jid.includes('@g.us')) {
+      await registrarWebhook(supabase, { ...trilha, resultado: 'descartado', detalhe: 'grupo ou sem jid' })
+      return NextResponse.json({ ignored: 'group ou sem jid' })
+    }
 
     const telefone = cleanWhatsappJid(jid)
     const texto: string =
@@ -132,7 +161,8 @@ export async function POST(req: NextRequest) {
     // fromMe: mensagem enviada pelo próprio número (Sara via API ou manual pelo celular)
     if (data?.key?.fromMe === true) {
       const conteudoOut = texto || data?.message?.imageMessage?.caption || '[mídia]'
-      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid })
+      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid, canal: 'evolution', canalRef })
+      await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
       return NextResponse.json({ ok: true, fromMe: status })
     }
 
@@ -159,7 +189,7 @@ export async function POST(req: NextRequest) {
     // debounce de 15s roda sem segurar a resposta ao Evolution (evita reenvio).
     after(async () => {
       try {
-        await processarMensagemRecebida(supabase, {
+        const status = await processarMensagemRecebida(supabase, {
           telefone,
           conteudo,
           pushName,
@@ -167,7 +197,8 @@ export async function POST(req: NextRequest) {
           origem: 'whatsapp',
           tag: 'whatsapp',
           enviarTexto: enviarEvolution,
-          canalEnvio: canalNaoOficial(),
+          canalEnvio: 'evolution',
+          canalRef,
           canal: ad ? 'meta-ads' : 'organico',
           campanha: ad ? ad.title || ad.sourceId || null : null,
           referral: ad || null,
@@ -177,9 +208,11 @@ export async function POST(req: NextRequest) {
             data?.contextInfo?.stanzaId ||
             null,
         })
+        await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
       } catch (e) {
         console.error('Webhook (after) erro:', e)
         await registrarAlerta(supabase, 'webhook/whatsapp', e instanceof Error ? e.message : String(e))
+        await registrarWebhook(supabase, { ...trilha, resultado: 'erro', detalhe: e instanceof Error ? e.message : String(e) })
       }
     })
 

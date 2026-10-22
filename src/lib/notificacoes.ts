@@ -1,5 +1,6 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp, enviarTemplateWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarTemplateWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarAvisoInterno } from '@/lib/canais/enviar'
 
 // Fallback por template quando o envio livre falha (fora da janela de 24h).
 export type TemplateFallback = { name: string; language?: string; variaveis: string[] }
@@ -38,7 +39,7 @@ export async function notificarGestor(
 
     try {
       // Tenta o envio livre (grátis dentro da janela de 24h).
-      await enviarTextoWhatsApp(tel, mensagem)
+      await enviarAvisoInterno(tel, mensagem)
     } catch (errLivre) {
       // Fora da janela de 24h o envio livre falha (ex.: 131047). Recai no template
       // aprovado, que entrega a qualquer hora. Se não houver template, propaga.

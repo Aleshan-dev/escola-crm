@@ -25,7 +25,7 @@ export function horaEDiaLocal(nowMs: number, fuso: string): { hora: number; dia:
 export function avaliarJanela(
   cfg: ConfigCanal, origem: OrigemEnvio, nowMs: number,
 ): { ok: true } | { ok: false; motivo: 'fora_da_janela' | 'domingo' } {
-  if (origem === 'manual') return { ok: true }
+  if (origem === 'manual' || origem === 'aviso_interno') return { ok: true }
   const { hora, dia } = horaEDiaLocal(nowMs, cfg.fuso)
   const proativa = ORIGEM_PROATIVA[origem]
   if (proativa && dia === 0 && !cfg.domingoDisparo) return { ok: false, motivo: 'domingo' }
