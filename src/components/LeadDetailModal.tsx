@@ -5,6 +5,7 @@ import type { Coluna, Lead } from '@/lib/types'
 import { createClient } from '@/lib/supabase-browser'
 import { X, Bot, MessageSquare, Phone, Mail, Baby, FileText, CheckSquare, Square, Trash2, Plus, ListChecks, CheckCircle2, Circle, BellOff, Bell } from 'lucide-react'
 import Link from 'next/link'
+import { MemoriaLead } from '@/components/MemoriaLead'
 
 function diasNaEtapa(entrou: string): number {
   const ms = Date.now() - new Date(entrou).getTime()
@@ -449,6 +450,8 @@ export function LeadDetailModal({
               {tErro && <p className="text-xs text-red-600">{tErro}</p>}
             </div>
           </div>
+
+          <MemoriaLead leadId={lead.id} />
 
           <div>
             <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><FileText className="w-4 h-4 text-slate-400" />Anotações</div>

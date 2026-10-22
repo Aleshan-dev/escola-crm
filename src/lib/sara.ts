@@ -5,6 +5,8 @@ import { formatarIdade } from '@/lib/idade'
 import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
 import { chamarModeloIA } from '@/lib/ia-credenciais'
 import { REGRA_ABRIR_CASO, blocoCasoAberto, type EstadoCaso } from '@/lib/casos/regras'
+import { CAMPO_JSON_MEMORIA, ORCAMENTO_PADRAO, blocoMemoria, parseMemoriaSalvar, type PedidoMemoria } from '@/lib/memoria/regras'
+import { carregarMemoria } from '@/lib/memoria/servico'
 
 export type SaraColuna = {
   id: string
@@ -66,6 +68,10 @@ export type SaraResposta = {
   // família deu quando a equipe pediu. Só vêm preenchidos com config_ia.casos_ativo.
   abrir_caso: unknown
   atualizar_caso: { informacao: string } | null
+  // MEMÓRIA (src/lib/memoria): fatos duráveis a gravar, já com `substitui` em uuid.
+  // Só o atendimento real grava (atendimento.ts / api/sara/responder); preview e
+  // teste de rascunho apenas leem.
+  memoria_salvar: PedidoMemoria[]
 }
 
 /** Turno extra no fim do histórico (retorno de Caso, reforço da guarda de promessa). */
@@ -197,6 +203,10 @@ export async function gerarRespostaSara(
         .in('estado', ['aguardando_equipe', 'aguardando_familia'])
         .maybeSingle()
     : { data: null }
+
+  // MEMÓRIA: fatos duráveis de conversas anteriores (além da janela de 20).
+  const memoriaAtiva = config?.memoria_ativa !== false
+  const memoria = memoriaAtiva ? await carregarMemoria(supabase, leadId) : { notas: [], mapa: {} }
 
   const ultimasMsgsIA = historico
     .filter((m) => m.direcao === 'out_ia')
@@ -458,6 +468,7 @@ ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
 ${blocoRegras}
 ${blocoAnotacoes}
+${memoriaAtiva ? blocoMemoria(memoria.notas, config?.memoria_orcamento_chars ?? ORCAMENTO_PADRAO) : ''}
 ${casosAtivo ? REGRA_ABRIR_CASO : ''}
 ${casosAtivo ? blocoCasoAberto(casoAberto as { numero: number; titulo: string; estado: EstadoCaso; nota_equipe: string | null } | null) : ''}
 
@@ -521,7 +532,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "arquivar": false,
   "motivo_arquivamento": "texto ou null"${casosAtivo ? `,
   "abrir_caso": { "titulo": "...", "resumo": "...", "motivo": "...", "tipo": "outro" } ou null,
-  "atualizar_caso": { "informacao": "..." } ou null` : ''}
+  "atualizar_caso": { "informacao": "..." } ou null` : ''}${memoriaAtiva ? `,
+  ${CAMPO_JSON_MEMORIA}` : ''}
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -561,7 +573,8 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
   const modelo = config?.modelo?.trim() || 'gpt-4o'
 
   const raw = (await chamarModeloIA('sara', {
-    messages, model: modelo, maxTokens: 700, jsonMode: true,
+    // 900: folga para memoria_salvar sem truncar o JSON (era 700).
+    messages, model: modelo, maxTokens: 900, jsonMode: true,
     // Rascunho sem credencial (null) cai na do banco — igual à produção quando ela também é vazia.
     credencialId: configOverride ? ((config?.sara_credencial_id as string | null) ?? null) : undefined,
   })) || '{}'
@@ -602,6 +615,7 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
         casosAtivo && typeof parsed.atualizar_caso?.informacao === 'string' && parsed.atualizar_caso.informacao.trim()
           ? { informacao: parsed.atualizar_caso.informacao.trim() }
           : null,
+      memoria_salvar: memoriaAtiva ? parseMemoriaSalvar(parsed.memoria_salvar, memoria.mapa) : [],
     }
   } catch {
     return {
@@ -622,6 +636,7 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       motivo_arquivamento: null,
       abrir_caso: null,
       atualizar_caso: null,
+      memoria_salvar: [],
     }
   }
 }

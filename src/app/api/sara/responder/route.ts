@@ -7,6 +7,7 @@ import { gerarRespostaSara } from '@/lib/sara'
 import { dividirEmBaloes } from '@/lib/atendimento'
 import { processarMensagemSalomao } from '@/lib/salomao'
 import { sleep } from '@/lib/pacing'
+import { aplicarMemoriaDoTurno } from '@/lib/memoria/servico'
 
 // Faz a IA responder AGORA a última mensagem do lead (continuar de onde parou),
 // acionado manualmente pelo atendente na tela do lead.
@@ -125,6 +126,7 @@ export async function POST(req: NextRequest) {
     if (sara.resumo_anotacao && sara.resumo_anotacao.trim()) {
       await supabase.from('anotacoes').insert({ lead_id, conteudo: sara.resumo_anotacao.trim() })
     }
+    await aplicarMemoriaDoTurno(createServerAdminClient(), { leadId: lead_id, origem: 'sara', pedidos: sara.memoria_salvar })
 
     return NextResponse.json({ ok: true, agente: 'sara', resposta: sara.resposta })
   } catch (e: unknown) {

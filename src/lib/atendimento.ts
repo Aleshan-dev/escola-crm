@@ -17,6 +17,7 @@ import { dividirEmBaloes } from '@/lib/baloes'
 import { cancelarCasoDoLead, casoAbertoDoLead, executarRespostaEquipe, lerConfigCasos } from '@/lib/casos/servico'
 import { executarRetornoCaso } from '@/lib/casos/retorno'
 import { aplicarCasosDoTurno } from '@/lib/casos/turno'
+import { aplicarMemoriaDoTurno } from '@/lib/memoria/servico'
 import { INSTRUCAO_REFORCO, detectaPromessaHumana, modoGuarda } from '@/lib/casos/guarda-promessa'
 import { validarAbertura } from '@/lib/casos/regras'
 
@@ -919,6 +920,9 @@ export async function processarMensagemRecebida(
           conteudo: saraResult.resumo_anotacao.trim(),
         })
       }
+
+      // Memória durável (src/lib/memoria): fatos que valem além da janela de 20 msgs.
+      await aplicarMemoriaDoTurno(supabase, { leadId: lead.id, origem: 'sara', pedidos: saraResult.memoria_salvar })
 
       // Sugestão de matrícula: a Sara sinaliza; o gestor confirma movendo para "Matriculados".
       // Update condicional (só quando ainda era false) evita notificar o gestor repetidamente.

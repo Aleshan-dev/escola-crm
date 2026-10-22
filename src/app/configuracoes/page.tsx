@@ -7,7 +7,7 @@ import Link from 'next/link'
 import {
   GraduationCap, Clock, Target, CalendarCheck, XCircle, Globe, MessageSquareText, Workflow, Bot,
   BookOpen, ChevronRight, DollarSign, Bell, BellRing, Wallet, ClipboardCheck, KeyRound, ShieldCheck,
-  Route, BarChart3, Shield, ToggleRight, Sparkles, Briefcase, type LucideIcon,
+  Route, BarChart3, Shield, ToggleRight, Sparkles, Briefcase, Brain, type LucideIcon,
 } from 'lucide-react'
 
 // Organização em hubs (inspirada no DeskcommCRM): o trabalho diário fica no menu do
@@ -36,6 +36,7 @@ const HUBS: Hub[] = [
           { titulo: 'Follow-up automático', descricao: 'Ligar/desligar e testar o follow-up por lead.', href: '/configuracoes/followup', icon: Workflow },
           { titulo: 'Notificações do gestor', descricao: 'Número do gestor e eventos que avisam por WhatsApp.', href: '/configuracoes/notificacoes', icon: Bell },
           { titulo: 'Casos', descricao: 'Ligar Casos, número de aviso, resposta pelo WhatsApp e guarda de promessa.', href: '/configuracoes/casos', icon: Briefcase },
+          { titulo: 'Memória do lead', descricao: 'Fatos duráveis que a Sara e o Salomão lembram entre conversas.', href: '/configuracoes/memoria', icon: Brain },
         ],
       },
       {

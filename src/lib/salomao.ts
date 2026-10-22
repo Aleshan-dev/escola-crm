@@ -8,6 +8,8 @@ import { normalizarCelularBR } from '@/lib/sgei'
 import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
 import { REGRA_ABRIR_CASO, blocoCasoAberto, type EstadoCaso } from '@/lib/casos/regras'
 import { aplicarCasosDoTurno } from '@/lib/casos/turno'
+import { CAMPO_JSON_MEMORIA, ORCAMENTO_PADRAO, blocoMemoria, parseMemoriaSalvar, type PedidoMemoria } from '@/lib/memoria/regras'
+import { aplicarMemoriaDoTurno, carregarMemoria } from '@/lib/memoria/servico'
 
 // Salomão — atendente virtual de PAIS JÁ MATRICULADOS (irmão da Sara).
 // A Sara atende leads; o Salomão atende famílias matriculadas, sob trava de
@@ -35,6 +37,8 @@ type SalomaoLLM = {
   // CASOS (src/lib/casos) — só com config_ia.casos_ativo.
   abrir_caso: unknown
   atualizar_caso: { informacao: string } | null
+  // MEMÓRIA (src/lib/memoria) — só com config_ia.memoria_ativa.
+  memoria_salvar: PedidoMemoria[]
 }
 
 // Quebra em balões curtos por parágrafo (máx. 3) — mesmo padrão do atendimento.
@@ -105,7 +109,7 @@ export async function gerarRespostaSalomaoLLM(
 ): Promise<SalomaoLLM> {
   const { data: configBanco } = await supabase
     .from('config_ia')
-    .select('modelo, salomao_modelo, salomao_system_prompt, salomao_credencial_id, maestro_diretrizes, casos_ativo')
+    .select('modelo, salomao_modelo, salomao_system_prompt, salomao_credencial_id, maestro_diretrizes, casos_ativo, memoria_ativa, memoria_orcamento_chars')
     .eq('id', 1)
     .single()
   const config = configOverride ? { ...(configBanco ?? {}), ...configOverride } as typeof configBanco : configBanco
@@ -121,6 +125,10 @@ export async function gerarRespostaSalomaoLLM(
         .in('estado', ['aguardando_equipe', 'aguardando_familia'])
         .maybeSingle()
     : { data: null }
+
+  // MEMÓRIA: o mesmo contexto durável da família que a Sara construiu (e vice-versa).
+  const memoriaAtiva = config?.memoria_ativa !== false
+  const memoria = memoriaAtiva ? await carregarMemoria(supabase, leadId) : { notas: [], mapa: {} }
 
   const { data: msgs } = await supabase
     .from('mensagens')
@@ -180,6 +188,8 @@ ${resolverDiretrizes(config)}
 ${casosAtivo ? `${REGRA_ABRIR_CASO}
 - Diferença para o RECADO: use "abrir_caso" para uma PERGUNTA cuja resposta a equipe pode te passar e você repassa por aqui (ex.: data de evento, uniforme, lista de material, horário de reunião). Use "recado" quando o pedido exige que a secretaria fale diretamente com o responsável (negociação, cadastro, reclamação). Nunca os dois no mesmo turno.
 ${blocoCasoAberto(casoAberto as { numero: number; titulo: string; estado: EstadoCaso; nota_equipe: string | null } | null)}` : ''}
+${memoriaAtiva ? `${blocoMemoria(memoria.notas, config?.memoria_orcamento_chars ?? ORCAMENTO_PADRAO)}
+- Para famílias matriculadas, vale lembrar: preferência de contato/horário, recados já dados, combinados com a secretaria. NUNCA grave valores, mensalidades, atrasos, dígitos de CPF ou PIX.` : ''}
 
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON):
 {
@@ -190,7 +200,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON):
   "transbordo": false,
   "motivo_transbordo": null${casosAtivo ? `,
   "abrir_caso": { "titulo": "...", "resumo": "...", "motivo": "...", "tipo": "outro" } ou null,
-  "atualizar_caso": { "informacao": "..." } ou null` : ''}
+  "atualizar_caso": { "informacao": "..." } ou null` : ''}${memoriaAtiva ? `,
+  ${CAMPO_JSON_MEMORIA}` : ''}
 }
 Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um instante, já vou gerar isso pra você! 😊") — os valores/o PIX serão enviados pelo sistema em seguida.`
 
@@ -211,7 +222,8 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
 
   const modelo = config?.salomao_modelo?.trim() || config?.modelo?.trim() || 'gpt-4o'
   const raw = (await chamarModeloIA('salomao', {
-    messages, model: modelo, maxTokens: 500, jsonMode: true,
+    // 700: folga para memoria_salvar sem truncar o JSON (era 500).
+    messages, model: modelo, maxTokens: 700, jsonMode: true,
     credencialId: configOverride ? (config?.salomao_credencial_id ?? null) : undefined,
   })) || '{}'
   try {
@@ -229,6 +241,7 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
         casosAtivo && typeof p.atualizar_caso?.informacao === 'string' && p.atualizar_caso.informacao.trim()
           ? { informacao: p.atualizar_caso.informacao.trim() }
           : null,
+      memoria_salvar: memoriaAtiva ? parseMemoriaSalvar(p.memoria_salvar, memoria.mapa) : [],
     }
   } catch {
     return {
@@ -240,6 +253,7 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
       motivo_transbordo: null,
       abrir_caso: null,
       atualizar_caso: null,
+      memoria_salvar: [],
     }
   }
 }
@@ -359,6 +373,10 @@ export async function processarMensagemSalomao(
   const tentativas: number = leadRow?.salomao_cpf_tentativas || 0
 
   const llm = await gerarRespostaSalomaoLLM(supabase, leadId, ident.primeiro_nome, tentativas)
+
+  // Memória: independe da ação do turno (financeiro/pix/recado retornam cedo abaixo).
+  // Nunca lança; dado financeiro é barrado pelas regras (validarNota + prompt).
+  await aplicarMemoriaDoTurno(supabase, { leadId, origem: 'salomao', pedidos: llm.memoria_salvar })
 
   // 3) Ações decididas pelo LLM, executadas por código.
   if (llm.acao === 'financeiro' && llm.cpf_prefixo) {
