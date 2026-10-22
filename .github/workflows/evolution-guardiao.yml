@@ -1,0 +1,75 @@
+name: Guardião do Evolution (restart MANUAL)
+
+# INCIDENTE-FOLLOWUP-PARADO-2026-07-29: o gateway Evolution caiu por volta das
+# 18h de Acre e a escola ficou muda no WhatsApp até o dia seguinte, sem um único
+# alerta. Esta é a REDE DE SEGURANÇA independente da aplicação.
+#
+# DESATIVADO (agendamento): como os demais crons do projeto, o agendamento roda
+# 100% na Vercel (ver vercel.json), que não consome minutos do GitHub Actions.
+# O restart diário das 06:00 de Acre e o monitor de saúde de 15 em 15 min estão
+# em /api/cron/evolution-guardiao. Mantido aqui só o disparo MANUAL, que serve a
+# dois propósitos concretos:
+#
+#   1. Testar se a sessão do WhatsApp sobrevive a um restart ANTES de confiar no
+#      agendamento diário (ver docs/GUARDIAO-EVOLUTION.md, seção de risco).
+#   2. Reiniciar na mão quando o painel do Railway não estiver acessível.
+#
+# Secrets necessários:
+#   RAILWAY_TOKEN          token de projeto ou workspace do Railway
+#   RAILWAY_SERVICE_NAME   nome do serviço do Evolution no Railway
+#   EVOLUTION_API_URL      ex.: https://evolution-xxxx.up.railway.app
+#   EVOLUTION_API_KEY      apikey da instância
+#   EVOLUTION_INSTANCE     nome da instância
+#   CRON_SECRET            para registrar o alerta no CRM se não reconectar
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Reiniciar o serviço do Evolution
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway redeploy --service "${{ secrets.RAILWAY_SERVICE_NAME }}" --yes
+          echo "Restart disparado."
+
+      - name: Esperar a instância voltar
+        run: sleep 60
+
+      - name: Verificar se o WhatsApp reconectou
+        id: check
+        env:
+          URL: ${{ secrets.EVOLUTION_API_URL }}
+          KEY: ${{ secrets.EVOLUTION_API_KEY }}
+          INSTANCE: ${{ secrets.EVOLUTION_INSTANCE }}
+        run: |
+          # Tenta por até 3 minutos: o Evolution demora a reabrir a sessão.
+          for i in $(seq 1 12); do
+            estado=$(curl -sS -H "apikey: $KEY" \
+              "$URL/instance/connectionState/$INSTANCE" \
+              | grep -o '"state":"[^"]*"' | head -1 | cut -d'"' -f4)
+            echo "tentativa $i -> estado=${estado:-vazio}"
+            if [ "$estado" = "open" ]; then
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::error::Evolution NÃO reconectou em 3 min após o restart."
+          echo "::error::Provável necessidade de reler o QR code no painel."
+          exit 1
+
+      - name: Registrar alerta se não reconectou
+        if: failure()
+        run: |
+          curl -sS -X GET \
+            "https://escola-crm.vercel.app/api/cron/evolution-guardiao" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" || true
+          echo "Alerta registrado no CRM (alertas_sistema)."

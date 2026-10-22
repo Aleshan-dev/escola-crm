@@ -40,6 +40,18 @@ export default function KanbanPage() {
   const [chatLead, setChatLead] = useState<Lead | null>(null)
   const [funis, setFunis] = useState<Funil[]>([])
   const [funilAtivo, setFunilAtivo] = useState<string>('')
+  // Leads com mensagem recebida ainda não visualizada.
+  const [naoLidas, setNaoLidas] = useState<Set<string>>(new Set())
+
+  // Recarrega só o conjunto de leads com mensagem "in" não lida (leve).
+  async function loadNaoLidas() {
+    const { data } = await supabase
+      .from('mensagens')
+      .select('lead_id')
+      .eq('direcao', 'in')
+      .eq('lida', false)
+    if (data) setNaoLidas(new Set((data as { lead_id: string }[]).map((m) => m.lead_id)))
+  }
 
   async function load() {
     setLoading(true)
@@ -51,6 +63,7 @@ export default function KanbanPage() {
         .select('*, familia:familias(*), crianca:criancas(*)')
         .eq('arquivado', false)
         .order('criado_em', { ascending: false }),
+      loadNaoLidas(),
     ])
     if (fns.data) {
       setFunis(fns.data as Funil[])
@@ -65,8 +78,11 @@ export default function KanbanPage() {
   useEffect(() => {
     load()
     const channel = supabase
-      .channel('leads-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, () => load())
+      .channel('kanban-changes')
+      // Leads: arquivar, mover de etapa, mudar temperatura, etc.
+      .on('postgres_changes', { event: '*', schema: 'crm', table: 'leads' }, () => load())
+      // Mensagens: badge de "não visualizada" acende/apaga ao vivo.
+      .on('postgres_changes', { event: '*', schema: 'crm', table: 'mensagens' }, () => loadNaoLidas())
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
@@ -176,6 +192,7 @@ export default function KanbanPage() {
                     key={col.id}
                     coluna={col}
                     leads={leadsDoFunil.filter((l) => l.coluna_id === col.id)}
+                    naoLidas={naoLidas}
                     onOpen={setDetalhe}
                     onChat={setChatLead}
                   />
@@ -203,6 +220,7 @@ export default function KanbanPage() {
           lead={detalhe}
           colunas={colunas}
           funis={funis}
+          onArchived={(id) => setLeads((prev) => prev.filter((l) => l.id !== id))}
           onClose={() => setDetalhe(null)}
         />
       )}
@@ -222,11 +240,13 @@ export default function KanbanPage() {
 function ColunaView({
   coluna,
   leads,
+  naoLidas,
   onOpen,
   onChat,
 }: {
   coluna: Coluna
   leads: Lead[]
+  naoLidas: Set<string>
   onOpen: (lead: Lead) => void
   onChat: (lead: Lead) => void
 }) {
@@ -251,7 +271,7 @@ function ColunaView({
       </div>
       <div className="space-y-2">
         {leads.map((lead) => (
-          <CardLead key={lead.id} lead={lead} onOpen={onOpen} onChat={onChat} />
+          <CardLead key={lead.id} lead={lead} naoLida={naoLidas.has(lead.id)} onOpen={onOpen} onChat={onChat} />
         ))}
         {leads.length === 0 && (
           <div className="text-center text-xs text-slate-400 py-6 border border-dashed border-slate-300 rounded-lg">
@@ -266,11 +286,13 @@ function ColunaView({
 function CardLead({
   lead,
   dragging,
+  naoLida,
   onOpen,
   onChat,
 }: {
   lead: Lead
   dragging?: boolean
+  naoLida?: boolean
   onOpen?: (lead: Lead) => void
   onChat?: (lead: Lead) => void
 }) {
@@ -293,17 +315,30 @@ function CardLead({
       {...attributes}
       {...listeners}
       onClick={() => onOpen?.(lead)}
-      className={`bg-white border border-slate-200 rounded-lg p-2.5 shadow-sm hover:border-blue-300 cursor-grab active:cursor-grabbing ${
-        isDragging || dragging ? 'opacity-30' : ''
-      }`}
+      className={`bg-white border rounded-lg p-2.5 shadow-sm hover:border-blue-300 cursor-grab active:cursor-grabbing ${
+        naoLida ? 'border-green-400 ring-1 ring-green-300' : 'border-slate-200'
+      } ${isDragging || dragging ? 'opacity-30' : ''}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium truncate">{lead.familia?.nome_responsavel || 'Sem nome'}</div>
+          <div className="flex items-center gap-1.5">
+            {naoLida && (
+              <span
+                title="Mensagem não visualizada"
+                className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-green-500 px-1.5 py-0.5 text-[9px] font-semibold text-white"
+              >
+                <MessageSquare className="w-2.5 h-2.5" />
+                nova
+              </span>
+            )}
+            <div className="text-sm font-medium truncate">{lead.familia?.nome_responsavel || 'Sem nome'}</div>
+          </div>
           {lead.crianca && (
             <div className="text-xs text-slate-500 truncate">
               {lead.crianca.nome}
-              {lead.crianca.idade ? `, ${lead.crianca.idade}a` : ''}
+              {(lead.crianca.idade != null || lead.crianca.idade_meses != null)
+                ? `, ${[lead.crianca.idade != null ? `${lead.crianca.idade}a` : '', lead.crianca.idade_meses != null ? `${lead.crianca.idade_meses}m` : ''].filter(Boolean).join(' ')}`
+                : ''}
             </div>
           )}
         </div>

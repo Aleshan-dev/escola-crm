@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import Link from 'next/link'
+import { MemoriaLead } from '@/components/MemoriaLead'
 import { ArrowLeft, MessageSquare, CalendarPlus, FileText, Loader2, Plus } from 'lucide-react'
 
 type Crianca = { id: string; nome: string }
@@ -180,6 +181,12 @@ export default function ResponsavelDetalhePage() {
               <Campo label="Estado" valor={f.estado} onSave={(v) => salvar('estado', v)} />
               <Campo label="País" valor={f.pais} onSave={(v) => salvar('pais', v)} />
             </div>
+
+            {lead && (
+              <div className="rounded-xl border border-slate-200 bg-white p-5">
+                <MemoriaLead leadId={lead.id} />
+              </div>
+            )}
 
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between">

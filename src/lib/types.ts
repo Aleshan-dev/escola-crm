@@ -28,6 +28,14 @@ export type Lead = {
   followup_count?: number
   ultimo_followup_em?: string | null
   followup_status?: 'ativo' | 'esgotado'
+  // Encerramento de atendimento: tira o lead do follow-up proativo, mas mantém a
+  // Sara reativa (ela ainda responde se a família voltar). Null = follow-up normal.
+  followup_encerrado_em?: string | null
+  followup_encerrado_motivo?: string | null
+  // Sara sugere encerrar (o gestor confirma no botão) — nunca silencia sozinha.
+  sugestao_encerramento?: boolean
+  sugestao_encerramento_em?: string | null
+  sugestao_encerramento_motivo?: string | null
   sugestao_matricula?: boolean
   sugestao_matricula_em?: string | null
   cog_intencao?: string | null
@@ -54,6 +62,7 @@ export type Crianca = {
   familia_id: string
   nome: string
   idade: number | null
+  idade_meses: number | null
   serie_desejada: string | null
   periodo: 'matutino' | 'vespertino' | 'integral' | null
 }
@@ -68,4 +77,11 @@ export type Mensagem = {
   enviado_por: string | null
   whatsapp_message_id: string | null
   criado_em: string
+  // Recibos de entrega (só faz sentido em mensagens de saída). O webhook Cloud e o
+  // do Evolution atualizam por whatsapp_message_id: enviado → entregue → lido → falhou.
+  status: 'enviado' | 'entregue' | 'lido' | 'falhou'
+  erro_envio: string | null
+  lida: boolean
+  agente: string | null
+  agente_origem: string | null
 }

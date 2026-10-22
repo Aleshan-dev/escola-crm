@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Topbar } from '@/components/Topbar'
 import Link from 'next/link'
-import { ArrowLeft, Loader2, Save, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Plus, Trash2 } from 'lucide-react'
+import { AbasVersao, BarraRascunho, HistoricoVersoes, TestarRascunho, useVersoesAgente } from '@/components/agentes/Versionamento'
 
 const CATEGORIAS = ['institucional', 'metodologia', 'precos', 'rotinas', 'faq', 'objecoes']
 
@@ -19,13 +20,14 @@ type Conhecimento = {
 export default function SaraConfigPage() {
   const supabase = createClient()
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [aba, setAba] = useState<'config' | 'historico'>('config')
 
-  const [nomeAgente, setNomeAgente] = useState('')
-  const [modelo, setModelo] = useState('')
-  const [informaPreco, setInformaPreco] = useState(false)
-  const [systemPrompt, setSystemPrompt] = useState('')
+  // Nome, modelo, credencial, preço e prompt são VERSIONADOS: editar grava
+  // rascunho; só "Publicar" leva para config_ia (produção).
+  const v = useVersoesAgente('sara')
+  const f = v.form
+  const [credenciais, setCredenciais] = useState<{ id: string; provedor: string; nome: string | null; ultimos4: string | null }[]>([])
 
   const [kb, setKb] = useState<Conhecimento[]>([])
   const [novaCat, setNovaCat] = useState('faq')
@@ -34,18 +36,12 @@ export default function SaraConfigPage() {
 
   async function load() {
     setLoading(true)
-    const [cfg, base] = await Promise.all([
-      supabase.from('config_ia').select('*').eq('id', 1).single(),
+    const [base, credsResp] = await Promise.all([
       supabase.from('base_conhecimento').select('*').order('categoria'),
+      fetch('/api/credenciais').then((r) => r.json()).catch(() => ({ credenciais: [] })),
     ])
-    const c = cfg.data as { nome_agente?: string; modelo?: string; informa_preco?: boolean; system_prompt?: string } | null
-    if (c) {
-      setNomeAgente(c.nome_agente || '')
-      setModelo(c.modelo || '')
-      setInformaPreco(!!c.informa_preco)
-      setSystemPrompt(c.system_prompt || '')
-    }
     if (base.data) setKb(base.data as unknown as Conhecimento[])
+    setCredenciais(credsResp?.credenciais || [])
     setLoading(false)
   }
 
@@ -53,23 +49,6 @@ export default function SaraConfigPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  async function salvarConfig() {
-    setSaving(true)
-    setMsg(null)
-    const { error } = await supabase
-      .from('config_ia')
-      .update({
-        nome_agente: nomeAgente.trim(),
-        modelo: modelo.trim(),
-        informa_preco: informaPreco,
-        system_prompt: systemPrompt,
-        atualizado_em: new Date().toISOString(),
-      })
-      .eq('id', 1)
-    setSaving(false)
-    setMsg(error ? `Erro ao salvar: ${error.message}` : 'Configurações salvas com sucesso.')
-  }
 
   async function adicionarConhecimento() {
     if (!novaPerg.trim() || !novaResp.trim()) {
@@ -108,9 +87,13 @@ export default function SaraConfigPage() {
           <ArrowLeft className="w-4 h-4" /> Configurações
         </Link>
         <h1 className="text-xl font-semibold mb-1">Comportamento da Sara</h1>
-        <p className="text-sm text-slate-500 mb-6">Defina como a assistente atende as famílias.</p>
+        <p className="text-sm text-slate-500 mb-4">Defina como a assistente atende as famílias.</p>
 
-        {loading ? (
+        <AbasVersao aba={aba} setAba={setAba} total={v.estado?.versoes.length ?? 0} />
+
+        {aba === 'historico' ? (
+          <HistoricoVersoes agente="sara" v={v} />
+        ) : loading || !v.estado ? (
           <div className="flex items-center gap-2 text-slate-500"><Loader2 className="w-5 h-5 animate-spin" /> Carregando...</div>
         ) : (
           <div className="space-y-8">
@@ -118,32 +101,40 @@ export default function SaraConfigPage() {
               <div className="grid sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium text-slate-500">Nome do agente</span>
-                  <input value={nomeAgente} onChange={(e) => setNomeAgente(e.target.value)} className={inputCls} />
+                  <input value={(f.nome_agente as string) ?? ''} onChange={(e) => v.set('nome_agente', e.target.value)} className={inputCls} />
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium text-slate-500">Modelo</span>
-                  <input value={modelo} onChange={(e) => setModelo(e.target.value)} className={inputCls} placeholder="gpt-4o" />
+                  <input value={(f.modelo as string) ?? ''} onChange={(e) => v.set('modelo', e.target.value)} className={inputCls} placeholder="gpt-4o" />
                 </label>
               </div>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Credencial de IA</span>
+                <select value={(f.sara_credencial_id as string) ?? ''} onChange={(e) => v.set('sara_credencial_id', e.target.value || null)} className={inputCls}>
+                  <option value="">Padrão (chave do ambiente)</option>
+                  {credenciais.map((c) => (
+                    <option key={c.id} value={c.id}>{(c.nome || c.provedor) + ' · …' + (c.ultimos4 || '')}</option>
+                  ))}
+                </select>
+                <Link href="/configuracoes/credenciais" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Gerenciar credenciais</Link>
+              </label>
               <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={informaPreco} onChange={(e) => setInformaPreco(e.target.checked)} />
+                <input type="checkbox" checked={f.informa_preco === true} onChange={(e) => v.set('informa_preco', e.target.checked)} />
                 Informar preço no WhatsApp
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-500">Prompt do sistema (regras de atendimento)</span>
-                <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} rows={16} className={`${inputCls} font-mono text-xs leading-relaxed`} />
+                <textarea value={(f.system_prompt as string) ?? ''} onChange={(e) => v.set('system_prompt', e.target.value)} rows={16} className={`${inputCls} font-mono text-xs leading-relaxed`} />
               </label>
-              <div className="flex items-center gap-3">
-                <button onClick={salvarConfig} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  Salvar
-                </button>
-                {msg && <span className="text-sm text-slate-600">{msg}</span>}
-              </div>
+              <BarraRascunho agente="sara" v={v} />
             </section>
 
+            <TestarRascunho agente="sara" v={v} />
+
             <section className="rounded-xl border border-slate-200 bg-white p-5">
-              <h2 className="text-sm font-semibold mb-3">Base de conhecimento</h2>
+              <h2 className="text-sm font-semibold">Base de conhecimento</h2>
+              <p className="text-xs text-slate-500 mb-3">Não é versionada: incluir, ativar ou remover vale na hora.</p>
+              {msg && <p className="text-sm text-red-600 mb-2">{msg}</p>}
               <div className="space-y-2 mb-4">
                 {kb.length === 0 && <p className="text-sm text-slate-400">Nenhum item cadastrado.</p>}
                 {kb.map((item) => (

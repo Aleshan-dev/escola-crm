@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-import { Home, Filter, CalendarDays, Users, MessageSquare, BellRing, ShieldCheck, Settings, LogOut, type LucideIcon } from 'lucide-react'
+import { Home, Filter, CalendarDays, Users, MessageSquare, BellRing, Briefcase, ShieldCheck, Settings, GraduationCap, LogOut, type LucideIcon } from 'lucide-react'
 
 const NAV: { href: string; icon: LucideIcon; label: string }[] = [
   { href: '/inicio', icon: Home, label: 'Início' },
@@ -12,8 +12,10 @@ const NAV: { href: string; icon: LucideIcon; label: string }[] = [
   { href: '/agendamentos', icon: CalendarDays, label: 'Agenda' },
   { href: '/responsaveis', icon: Users, label: 'Responsáveis' },
   { href: '/chat', icon: MessageSquare, label: 'Conversas' },
-  { href: '/pendentes', icon: BellRing, label: 'Atendimentos pendentes' },
-  { href: '/auditoria', icon: ShieldCheck, label: 'Auditoria da Sara' },
+  { href: '/treinar', icon: GraduationCap, label: 'Treinar Sara' },
+  { href: '/casos', icon: Briefcase, label: 'Casos' },
+  { href: '/pendentes', icon: BellRing, label: 'Alertas' },
+  { href: '/auditoria', icon: ShieldCheck, label: 'Auditoria' },
   { href: '/configuracoes', icon: Settings, label: 'Configurações' },
 ]
 
@@ -22,7 +24,6 @@ export function Topbar() {
   const router = useRouter()
   const supabase = createClient()
   const [iniciais, setIniciais] = useState('')
-  const [pendentes, setPendentes] = useState(0)
 
   useEffect(() => {
     (async () => {
@@ -30,17 +31,6 @@ export function Topbar() {
       const base = (data?.user?.email || '').split('@')[0] || ''
       setIniciais(base.slice(0, 2).toUpperCase())
     })()
-    async function contarPendentes() {
-      const { count } = await supabase
-        .from('leads')
-        .select('id', { count: 'exact', head: true })
-        .eq('precisa_atendimento_humano', true)
-        .eq('arquivado', false)
-      setPendentes(count || 0)
-    }
-    contarPendentes()
-    const t = setInterval(contarPendentes, 60000)
-    return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -57,16 +47,10 @@ export function Topbar() {
         {NAV.map((n) => {
           const ativo = pathname === n.href || pathname.startsWith(n.href + '/')
           const Icon = n.icon
-          const badge = n.href === '/pendentes' && pendentes > 0
           return (
             <Link key={n.href} href={n.href} title={n.label}
-              className={`relative flex h-11 w-11 items-center justify-center rounded-xl transition ${ativo ? 'bg-white/20' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+              className={`flex h-11 w-11 items-center justify-center rounded-xl transition ${ativo ? 'bg-white/20' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
               <Icon className="h-5 w-5" />
-              {badge && (
-                <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-[#1A237E]">
-                  {pendentes > 9 ? '9+' : pendentes}
-                </span>
-              )}
             </Link>
           )
         })}

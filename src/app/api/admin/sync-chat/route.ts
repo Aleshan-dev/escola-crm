@@ -133,9 +133,14 @@ export async function GET(req: NextRequest) {
     const tsNum = m.messageTimestamp ? Number(m.messageTimestamp) : 0
     const criado_em = tsNum > 0 ? new Date(tsNum * 1000).toISOString() : new Date().toISOString()
 
+    // fromMe que ainda NÃO está no nosso banco só pode ter sido digitada à mão no
+    // celular (as da Sara via API já são gravadas no envio). Mesma lógica do
+    // registrarMensagemManual: entra como Equipe (out_humano), não como Sara.
+    const enviadaPeloCelular = m.key?.fromMe === true
     await supabase.from('mensagens').insert({
       lead_id: lead.id,
-      direcao: m.key?.fromMe ? 'out_ia' : 'in',
+      direcao: enviadaPeloCelular ? 'out_humano' : 'in',
+      ...(enviadaPeloCelular ? { agente: 'humano', agente_origem: 'conversa' } : {}),
       conteudo: texto,
       whatsapp_message_id: wid,
       criado_em,
