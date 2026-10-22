@@ -97,6 +97,14 @@ export async function POST(req: NextRequest) {
     // Conserta casamento de família, destino da resposta E o nome do lead.
     const { telefone, nome } = await resolverContatoWaha(from)
 
+    // Sem número real (um @lid que o WAHA não conseguiu mapear): NÃO cria família
+    // nem grava mensagem. Usar o LID como "telefone" misturava conversas de pessoas
+    // diferentes e criava contatos-fantasma. Registra alerta para reprocesso manual.
+    if (!telefone) {
+      await registrarAlerta(supabase, 'webhook/waha', `LID não resolvido para número: ${from}`)
+      return NextResponse.json({ ignored: 'lid-sem-numero', from })
+    }
+
     const texto: string = p?.body || ''
     const pushName: string = nome || p?.notifyName || p?._data?.notifyName || 'Família'
     const wid = widDe(p?.id)

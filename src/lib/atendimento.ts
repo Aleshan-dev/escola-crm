@@ -19,6 +19,22 @@ import type { Canal } from '@/lib/envio/defaults'
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
 
+/**
+ * Normaliza um telefone para a CHAVE DE IDENTIDADE do contato — espelho fiel de
+ * crm.fn_normalizar_celular (o trigger que preenche familias.telefone_norm). Usar
+ * a mesma regra aqui garante que o casamento de família encontre o contato já
+ * existente, independentemente do formato que chegou (+55…, 55…, com/sem o 9º
+ * dígito). A identidade é o NÚMERO; não deduplicar por isto foi o que duplicou
+ * leads do mesmo responsável.
+ */
+export function normalizarCelular(raw: string): string {
+  let d = (raw || '').replace(/\D/g, '')
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2)
+  if (d.length === 10) d = d.slice(0, 2) + '9' + d.slice(2)
+  if (d.length === 11) return d
+  return d.slice(-11)
+}
+
 /** Envia um texto pelo canal e devolve o id da mensagem (ou null). */
 export type EnviarTexto = (telefone: string, texto: string) => Promise<string | null>
 
@@ -129,7 +145,9 @@ export async function registrarMensagemManual(
   const { data: fam } = await supabase
     .from('familias')
     .select('id')
-    .eq('telefone', telefone)
+    .eq('telefone_norm', normalizarCelular(telefone))
+    .order('criado_em', { ascending: true })
+    .limit(1)
     .maybeSingle()
   if (!fam) return 'fromMe_sem_familia'
 
@@ -202,10 +220,19 @@ export async function processarMensagemRecebida(
     if (jaProcessada) return 'duplicada_ignorada'
   }
 
+  // Casa o contato pela IDENTIDADE (número normalizado), não pelo telefone cru:
+  // o mesmo número pode chegar como +55…, 55… ou com/sem o 9º dígito. Casar pelo
+  // cru fazia o mesmo responsável virar duas famílias/leads.
+  const telNorm = normalizarCelular(telefone)
+  // Se restar mais de uma família com o mesmo número (duplicata legada), a mais
+  // ANTIGA é a canônica — mantém a atribuição first-touch. order+limit evita o
+  // erro de "múltiplas linhas" e é determinístico.
   let { data: familia } = await supabase
     .from('familias')
     .select('id, nome_responsavel, ja_responsavel')
-    .eq('telefone', telefone)
+    .eq('telefone_norm', telNorm)
+    .order('criado_em', { ascending: true })
+    .limit(1)
     .maybeSingle()
 
   if (!familia) {
@@ -233,7 +260,9 @@ export async function processarMensagemRecebida(
       const rel = await supabase
         .from('familias')
         .select('id, nome_responsavel, ja_responsavel')
-        .eq('telefone', telefone)
+        .eq('telefone_norm', telNorm)
+        .order('criado_em', { ascending: true })
+        .limit(1)
         .maybeSingle()
       familia = rel.data
     }

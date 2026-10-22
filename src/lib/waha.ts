@@ -210,7 +210,11 @@ export async function resolverTelefoneWaha(from: string): Promise<{ telefone: st
     } catch { /* tenta o próximo */ }
   }
 
-  return { telefone: soDigitos(raw), via: 'lid-fallback' }
+  // Não resolveu o @lid para um número real. NUNCA usar os dígitos do próprio LID
+  // como telefone: isso cria contatos-fantasma e mistura conversas de pessoas
+  // diferentes num mesmo contato. A identidade é o NÚMERO de WhatsApp — sem ele,
+  // devolve telefone vazio e deixa o webhook ignorar a mensagem.
+  return { telefone: '', via: 'lid-naoresolvido' }
 }
 
 // Resolve o CONTATO (telefone real + nome do WhatsApp) por trás de um `from` que
