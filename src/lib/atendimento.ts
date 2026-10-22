@@ -13,6 +13,13 @@ import { registrarDecisaoRoteador } from '@/lib/roteador/log'
 import { encaminharParaHumano, resolverTurno } from '@/lib/roteador/turno'
 import { protegerEnviarTexto } from '@/lib/envio/portao'
 import type { Canal } from '@/lib/envio/defaults'
+import { dividirEmBaloes } from '@/lib/baloes'
+import { pareceComando } from '@/lib/casos/comandos'
+import { cancelarCasoDoLead, casoAbertoDoLead, executarComando, lerConfigCasos } from '@/lib/casos/servico'
+import { executarRetornoCaso } from '@/lib/casos/retorno'
+import { aplicarCasosDoTurno } from '@/lib/casos/turno'
+import { INSTRUCAO_REFORCO, detectaPromessaHumana, modoGuarda } from '@/lib/casos/guarda-promessa'
+import { validarAbertura } from '@/lib/casos/regras'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -38,26 +45,9 @@ export function normalizarCelular(raw: string): string {
 /** Envia um texto pelo canal e devolve o id da mensagem (ou null). */
 export type EnviarTexto = (telefone: string, texto: string) => Promise<string | null>
 
-/** Quebra a resposta da Sara em balões curtos (máx. 3) — como o manual pede.
- * Primeiro tenta por parágrafos (linha em branco); se vier um bloco único longo,
- * quebra por frases em pedaços de ~160 caracteres. */
-export function dividirEmBaloes(texto: string): string[] {
-  const porParagrafo = texto.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
-  let baloes = porParagrafo.length ? porParagrafo : [texto.trim()]
-
-  if (baloes.length === 1 && baloes[0].length > 200) {
-    const frases = baloes[0].match(/[^.!?]+[.!?]*\s*/g)?.map((s) => s.trim()).filter(Boolean) || [baloes[0]]
-    baloes = []
-    let atual = ''
-    for (const f of frases) {
-      if (atual && (atual + ' ' + f).length > 160) { baloes.push(atual); atual = f }
-      else atual = atual ? `${atual} ${f}` : f
-    }
-    if (atual) baloes.push(atual)
-  }
-
-  return baloes.map((b) => b.trim()).filter(Boolean).slice(0, 3)
-}
+// Mora em src/lib/baloes.ts (o retorno dos Casos também usa); reexportado aqui
+// para os importadores antigos.
+export { dividirEmBaloes }
 
 // Trava de resposta por lead (mutex). O debounce de 15s filtra "existe balão
 // mais novo?", mas NÃO impede duas execuções concorrentes de passarem no teste
@@ -224,6 +214,20 @@ export async function processarMensagemRecebida(
   // o mesmo número pode chegar como +55…, 55… ou com/sem o 9º dígito. Casar pelo
   // cru fazia o mesmo responsável virar duas famílias/leads.
   const telNorm = normalizarCelular(telefone)
+
+  // CASOS — comando da equipe pelo WhatsApp ("#C12 ok ..."), vindo do número de
+  // aviso. Sai do fluxo normal: não cria família/lead nem roda IA. Mensagem desse
+  // número que não é comando segue o fluxo de sempre.
+  if (pareceComando(conteudo)) {
+    const cfgCasos = await lerConfigCasos(supabase)
+    if (cfgCasos.ativo && cfgCasos.comandosWhatsapp && cfgCasos.telefoneAviso && normalizarCelular(cfgCasos.telefoneAviso) === telNorm) {
+      const { resposta, retornoCasoId } = await executarComando(supabase, conteudo)
+      await enviarTexto(telefone, resposta).catch((e) => console.error('[casos] resposta ao comando falhou:', e))
+      if (retornoCasoId) await executarRetornoCaso(retornoCasoId, supabase)
+      return 'comando_caso'
+    }
+  }
+
   // Se restar mais de uma família com o mesmo número (duplicata legada), a mais
   // ANTIGA é a canônica — mantém a atribuição first-touch. order+limit evita o
   // erro de "múltiplas linhas" e é determinístico.
@@ -522,6 +526,7 @@ export async function processarMensagemRecebida(
   // o PostgREST só devolve erro no resultado, não derruba o fluxo).
   if (optOut) {
     await supabase.from('familias').update({ opt_out_em: new Date().toISOString() }).eq('id', familia.id)
+    await cancelarCasoDoLead(supabase, lead.id, 'opt-out').catch(() => null)
     if (lead.ia_ativa) {
       await supabase.from('leads').update({ ia_ativa: false }).eq('id', lead.id)
       await supabase.from('eventos_timeline').insert({
@@ -652,11 +657,33 @@ export async function processarMensagemRecebida(
 
       const colunaAtual = todasColunas?.find((c) => c.id === lead!.coluna_id) as SaraColuna | undefined
 
-      const saraResult = await gerarRespostaSara(
+      let saraResult = await gerarRespostaSara(
         lead.id,
         todasColunas as SaraColuna[] | undefined,
         colunaAtual
       )
+
+      // GUARDA DE PROMESSA (Casos, modo 'ativo'): prometeu verificar/retornar sem
+      // abrir Caso → regera UMA vez pedindo "abra o Caso ou reformule". Se insistir,
+      // aplicarCasosDoTurno (mais abaixo) abre um Caso mínimo para a promessa ter dono.
+      const cfgCasos = await lerConfigCasos(supabase)
+      if (
+        cfgCasos.ativo &&
+        modoGuarda(cfgCasos.guardaPromessa) === 'ativo' &&
+        !saraResult.transbordo &&
+        !validarAbertura(saraResult.abrir_caso) &&
+        detectaPromessaHumana(saraResult.resposta) &&
+        !(await casoAbertoDoLead(supabase, lead.id))
+      ) {
+        saraResult = await gerarRespostaSara(
+          lead.id,
+          todasColunas as SaraColuna[] | undefined,
+          colunaAtual,
+          undefined,
+          null,
+          { turnoFinal: INSTRUCAO_REFORCO }
+        )
+      }
 
       // Envia em balões curtos (uma mensagem por parágrafo), conforme o manual.
       const baloes = dividirEmBaloes(saraResult.resposta)
@@ -676,6 +703,7 @@ export async function processarMensagemRecebida(
       // Candidato a vaga/currículo: já foi orientado a mandar por e-mail — arquiva e encerra.
       if (saraResult.arquivar) {
         await supabase.from('leads').update({ arquivado: true, ia_ativa: false }).eq('id', lead.id)
+        await cancelarCasoDoLead(supabase, lead.id, 'lead arquivado').catch(() => null)
         await supabase.from('acoes_sara').insert({
           lead_id: lead.id,
           tipo: 'movimentacao',
@@ -906,6 +934,16 @@ export async function processarMensagemRecebida(
             `📝 *Sara sugere matrícula*\nFamília: ${familia.nome_responsavel || 'Família'}\nTelefone: ${telefone}\nConfirme movendo o lead para "Matriculados".`
           )
         }
+      }
+
+      // Casos: abrir para a equipe / repassar o que a família respondeu / guarda.
+      try {
+        await aplicarCasosDoTurno(supabase, {
+          leadId: lead.id, agente: 'sara', abrirCaso: saraResult.abrir_caso, atualizarCaso: saraResult.atualizar_caso,
+          resposta: saraResult.resposta, transbordo: saraResult.transbordo, conteudoIn: conteudo,
+        })
+      } catch (e) {
+        console.error('[casos] Sara: falha ao aplicar Caso:', e)
       }
 
       // Transbordo

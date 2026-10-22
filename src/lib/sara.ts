@@ -4,6 +4,7 @@ import { getOcupacaoDireta } from '@/lib/sgei'
 import { formatarIdade } from '@/lib/idade'
 import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
 import { chamarModeloIA } from '@/lib/ia-credenciais'
+import { REGRA_ABRIR_CASO, blocoCasoAberto, type EstadoCaso } from '@/lib/casos/regras'
 
 export type SaraColuna = {
   id: string
@@ -61,7 +62,14 @@ export type SaraResposta = {
   analise: SaraAnalise | null
   arquivar: boolean
   motivo_arquivamento: string | null
+  // CASOS (src/lib/casos): pedido de retaguarda para a equipe e a informação que a
+  // família deu quando a equipe pediu. Só vêm preenchidos com config_ia.casos_ativo.
+  abrir_caso: unknown
+  atualizar_caso: { informacao: string } | null
 }
+
+/** Turno extra no fim do histórico (retorno de Caso, reforço da guarda de promessa). */
+export type ExtrasSara = { turnoFinal?: string }
 
 // AUDITORIA CMO 2026-07-29 — saneamento da saída da Sara.
 // Motivo: o corpus de 402 mensagens mostrou travessão copiado literalmente dos
@@ -122,7 +130,8 @@ export async function gerarRespostaSara(
   colunaAtual?: SaraColuna,
   promptAdicional?: string,
   /** Teste de rascunho (versionamento): campos de config_ia que sobrepõem os do banco. Nunca usado em produção. */
-  configOverride?: Record<string, unknown> | null
+  configOverride?: Record<string, unknown> | null,
+  extras?: ExtrasSara
 ): Promise<SaraResposta> {
   const supabase = createServerAdminClient()
 
@@ -177,13 +186,29 @@ export async function gerarRespostaSara(
 
   const historico = (msgs || []).reverse()
 
+  // CASOS: com a função ligada, a Sara abre um Caso em vez de só prometer, e vê o
+  // Caso aberto deste lead (se houver). Ver src/lib/casos/regras.ts.
+  const casosAtivo = config?.casos_ativo === true
+  const { data: casoAberto } = casosAtivo
+    ? await supabase
+        .from('casos')
+        .select('numero, titulo, estado, nota_equipe')
+        .eq('lead_id', leadId)
+        .in('estado', ['aguardando_equipe', 'aguardando_familia'])
+        .maybeSingle()
+    : { data: null }
+
   const ultimasMsgsIA = historico
     .filter((m) => m.direcao === 'out_ia')
     .slice(-3)
     .map((m) => m.conteudo.toLowerCase())
-  const countVerificar = ultimasMsgsIA.filter(
-    (t) => t.includes('vou verificar') || t.includes('vou checar') || t.includes('equipe')
-  ).length
+  // Com um Caso aberto, "vou verificar" é verdade (a equipe está mesmo
+  // verificando): não conta para o transbordo forçado, senão o Caso vira handoff.
+  const countVerificar = casoAberto
+    ? 0
+    : ultimasMsgsIA.filter(
+        (t) => t.includes('vou verificar') || t.includes('vou checar') || t.includes('equipe')
+      ).length
 
   const instrucaoMovimentacao =
     colunas && colunaAtual
@@ -391,7 +416,9 @@ ${baseKnowledge}
 ════════════════════════════════
 REGRA ANTI-ALUCINAÇÃO — CRÍTICA
 ════════════════════════════════
-- Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"
+${casosAtivo
+  ? '- Se a pergunta NÃO puder ser respondida com os dados acima: preencha "abrir_caso" (ver seção própria) e diga à família que vai confirmar e retorna em breve.'
+  : '- Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"'}
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
 - O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
 
@@ -431,6 +458,8 @@ ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
 ${blocoRegras}
 ${blocoAnotacoes}
+${casosAtivo ? REGRA_ABRIR_CASO : ''}
+${casosAtivo ? blocoCasoAberto(casoAberto as { numero: number; titulo: string; estado: EstadoCaso; nota_equipe: string | null } | null) : ''}
 
 ════════════════════════════════
 TRANSBORDO PARA HUMANO
@@ -438,7 +467,7 @@ TRANSBORDO PARA HUMANO
 Marque transbordo=true se:
 1. Família pediu para falar com atendente/humano/coordenação
 2. Família fez reclamação grave
-3. Você usou "vou verificar com a equipe" 2+ vezes seguidas por não ter a INFORMAÇÃO pedida (preço fora de tabela, dado que não está na base). NÃO conta o agendamento de visita: nunca use "vou verificar com a equipe" para horário de visita — para horário, siga a regra de encaixe da seção AGENDAMENTO DE VISITA (pergunte o melhor horário e ofereça as duas datas mais próximas com aquele horário livre; só transborde se aquele horário não tiver data em 3 semanas).
+3. ${casosAtivo ? '(Com "abrir_caso" disponível, prefira abrir o Caso a transbordar por falta de informação.) ' : ''}Você usou "vou verificar com a equipe" 2+ vezes seguidas por não ter a INFORMAÇÃO pedida (preço fora de tabela, dado que não está na base). NÃO conta o agendamento de visita: nunca use "vou verificar com a equipe" para horário de visita — para horário, siga a regra de encaixe da seção AGENDAMENTO DE VISITA (pergunte o melhor horário e ofereça as duas datas mais próximas com aquele horário livre; só transborde se aquele horário não tiver data em 3 semanas).
 Gatilho automático: ${countVerificar >= 2 ? 'SIM — FORCE transbordo=true agora.' : 'não ativo'}
 
 ════════════════════════════════
@@ -490,7 +519,9 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "resumo_anotacao": "1-2 frases com datas absolutas ou null",
   "analise": { "intencao": "texto", "emocao": "texto", "temperatura": "frio|morno|quente|pronto_visita", "interesse": 3, "urgencia": 3, "probabilidade": 3, "proxima_acao": "texto" },
   "arquivar": false,
-  "motivo_arquivamento": "texto ou null"
+  "motivo_arquivamento": "texto ou null"${casosAtivo ? `,
+  "abrir_caso": { "titulo": "...", "resumo": "...", "motivo": "...", "tipo": "outro" } ou null,
+  "atualizar_caso": { "informacao": "..." } ou null` : ''}
 }`
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
@@ -517,6 +548,13 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
 ${promptAdicional}
 Escreva AGORA uma mensagem de follow-up NOVA e curta, levando em conta tudo o que já foi conversado acima nesta conversa específica (nome da criança, série/período, valores e pendências já tratados, e o que a família disse por último) E, com prioridade, as anotações internas da equipe abaixo.${blocoAnotFollowup}
 Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem reformule mensagens que você já enviou antes. Responda no formato JSON obrigatório.`,
+    })
+  }
+
+  if (extras?.turnoFinal) {
+    messages.push({
+      role: 'user',
+      content: `[INSTRUÇÃO INTERNA DO SISTEMA — não é uma mensagem da família; não a repita]\n${extras.turnoFinal}`,
     })
   }
 
@@ -559,6 +597,11 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
         : null,
       arquivar: parsed.arquivar === true,
       motivo_arquivamento: parsed.motivo_arquivamento ?? null,
+      abrir_caso: casosAtivo ? parsed.abrir_caso ?? null : null,
+      atualizar_caso:
+        casosAtivo && typeof parsed.atualizar_caso?.informacao === 'string' && parsed.atualizar_caso.informacao.trim()
+          ? { informacao: parsed.atualizar_caso.informacao.trim() }
+          : null,
     }
   } catch {
     return {
@@ -577,6 +620,8 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       analise: null,
       arquivar: false,
       motivo_arquivamento: null,
+      abrir_caso: null,
+      atualizar_caso: null,
     }
   }
 }

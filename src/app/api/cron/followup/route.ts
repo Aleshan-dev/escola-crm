@@ -254,11 +254,24 @@ export async function executarFollowup(agora: number = Date.now()) {
     return { error: error.message }
   }
 
+  // CASOS: lead com Caso esperando a equipe fica fora do follow-up — a família está
+  // aguardando uma resposta da escola, e um "ainda tem interesse?" agora seria uma
+  // segunda voz automática atravessando o retorno. (Sem a função ligada, não há Casos.)
+  const { data: casosEsperando } = await supabase
+    .from('casos')
+    .select('lead_id')
+    .eq('estado', 'aguardando_equipe')
+  const comCasoEsperando = new Set((casosEsperando ?? []).map((c: { lead_id: string }) => c.lead_id))
+
   const resultados: Resultado[] = []
   let enviados = 0
   let toques = 0
 
   for (const lead of (leadsRaw || []) as unknown as LeadRow[]) {
+    if (comCasoEsperando.has(lead.id)) {
+      resultados.push({ lead: lead.id, skip: 'caso_aguardando_equipe' })
+      continue
+    }
     // Teto por execução: conta TODA geração da Sara (LLM), não só os envios reais.
     // Fora da janela o toque vira alerta manual (não incrementa `enviados`), mas a
     // chamada ao LLM acontece igual. Sem contar isso, um backlog grande fazia dezenas

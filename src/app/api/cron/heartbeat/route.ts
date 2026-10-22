@@ -3,6 +3,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { registrarAlerta } from '@/lib/alertas'
 import { dentroHorarioComercial } from '@/lib/followup-regras'
 import { executarFollowup } from '../followup/route'
+import { cobrarCasosParados } from '@/lib/casos/cobranca'
 
 // ============================================================================
 // HEARTBEAT + GATILHO EM PROCESSO do motor de follow-up.
@@ -47,6 +48,17 @@ export async function GET(req: NextRequest) {
     .not('texto_norm', 'is', null)
     .then(({ error }) => error && console.error('[heartbeat] poda do envio_ledger falhou:', error.message))
 
+  // Casos parados (src/lib/casos/cobranca.ts): independe do follow-up estar ligado;
+  // só em horário comercial (avisa a equipe e pode falar com a família). Falha aqui
+  // não derruba o resto do heartbeat.
+  let casos: Awaited<ReturnType<typeof cobrarCasosParados>> | { erro: string } | null = null
+  if (dentroHorarioComercial(agora)) {
+    casos = await cobrarCasosParados(supabase).catch((e) => {
+      console.error('[heartbeat] cobrança de Casos falhou:', e)
+      return { erro: e instanceof Error ? e.message : String(e) }
+    })
+  }
+
   try {
     // O follow-up está LIGADO? Se não, o heartbeat fica dormente (não aciona nem alarma).
     const { data: cfg } = await supabase
@@ -55,7 +67,7 @@ export async function GET(req: NextRequest) {
       .eq('id', 1)
       .maybeSingle<{ followup_ativo: boolean }>()
     if (!cfg?.followup_ativo) {
-      return NextResponse.json({ ok: true, pulado: 'followup_desligado' })
+      return NextResponse.json({ ok: true, pulado: 'followup_desligado', casos })
     }
 
     // Fora do horário comercial o motor não envia — nem tenta (evita ruído noturno).
@@ -67,7 +79,7 @@ export async function GET(req: NextRequest) {
     // dedicado da Vercel morrer sozinho). Alarme só se ISSO falhar.
     try {
       const resumo = await executarFollowup(agora)
-      return NextResponse.json({ ok: true, followup_ok: true, followup: resumo })
+      return NextResponse.json({ ok: true, followup_ok: true, followup: resumo, casos })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       console.error('heartbeat -> executarFollowup falhou:', msg)

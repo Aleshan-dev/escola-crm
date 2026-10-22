@@ -6,6 +6,8 @@ import { registrarAlerta } from '@/lib/alertas'
 import { sleep } from '@/lib/pacing'
 import { normalizarCelularBR } from '@/lib/sgei'
 import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
+import { REGRA_ABRIR_CASO, blocoCasoAberto, type EstadoCaso } from '@/lib/casos/regras'
+import { aplicarCasosDoTurno } from '@/lib/casos/turno'
 
 // Salomão — atendente virtual de PAIS JÁ MATRICULADOS (irmão da Sara).
 // A Sara atende leads; o Salomão atende famílias matriculadas, sob trava de
@@ -30,6 +32,9 @@ type SalomaoLLM = {
   recado_texto: string | null
   transbordo: boolean
   motivo_transbordo: string | null
+  // CASOS (src/lib/casos) — só com config_ia.casos_ativo.
+  abrir_caso: unknown
+  atualizar_caso: { informacao: string } | null
 }
 
 // Quebra em balões curtos por parágrafo (máx. 3) — mesmo padrão do atendimento.
@@ -94,14 +99,28 @@ export async function gerarRespostaSalomaoLLM(
   primeiroNome: string | undefined,
   cpfTentativas: number,
   /** Teste de rascunho (versionamento): sobrepõe campos de config_ia. Nunca usado em produção. */
-  configOverride?: Record<string, unknown> | null
+  configOverride?: Record<string, unknown> | null,
+  /** Turno extra no fim do histórico (retorno de Caso). */
+  extras?: { turnoFinal?: string }
 ): Promise<SalomaoLLM> {
   const { data: configBanco } = await supabase
     .from('config_ia')
-    .select('modelo, salomao_modelo, salomao_system_prompt, salomao_credencial_id, maestro_diretrizes')
+    .select('modelo, salomao_modelo, salomao_system_prompt, salomao_credencial_id, maestro_diretrizes, casos_ativo')
     .eq('id', 1)
     .single()
   const config = configOverride ? { ...(configBanco ?? {}), ...configOverride } as typeof configBanco : configBanco
+
+  // CASOS: dúvida que o Salomão não sabe responder vira Caso para a equipe (a
+  // resposta volta pela conversa). Recado continua sendo recado (Arca).
+  const casosAtivo = config?.casos_ativo === true
+  const { data: casoAberto } = casosAtivo
+    ? await supabase
+        .from('casos')
+        .select('numero, titulo, estado, nota_equipe')
+        .eq('lead_id', leadId)
+        .in('estado', ['aguardando_equipe', 'aguardando_familia'])
+        .maybeSingle()
+    : { data: null }
 
   const { data: msgs } = await supabase
     .from('mensagens')
@@ -158,6 +177,9 @@ TRANSBORDO:
 Marque transbordo=true (com motivo_transbordo) se o responsável pedir insistentemente um atendente humano, fizer reclamação grave, ou demonstrar irritação com o atendimento automático.
 
 ${resolverDiretrizes(config)}
+${casosAtivo ? `${REGRA_ABRIR_CASO}
+- Diferença para o RECADO: use "abrir_caso" para uma PERGUNTA cuja resposta a equipe pode te passar e você repassa por aqui (ex.: data de evento, uniforme, lista de material, horário de reunião). Use "recado" quando o pedido exige que a secretaria fale diretamente com o responsável (negociação, cadastro, reclamação). Nunca os dois no mesmo turno.
+${blocoCasoAberto(casoAberto as { numero: number; titulo: string; estado: EstadoCaso; nota_equipe: string | null } | null)}` : ''}
 
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON):
 {
@@ -166,7 +188,9 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON):
   "cpf_prefixo": "123" ou null,
   "recado_texto": "resumo do pedido ou null",
   "transbordo": false,
-  "motivo_transbordo": null
+  "motivo_transbordo": null${casosAtivo ? `,
+  "abrir_caso": { "titulo": "...", "resumo": "...", "motivo": "...", "tipo": "outro" } ou null,
+  "atualizar_caso": { "informacao": "..." } ou null` : ''}
 }
 Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um instante, já vou gerar isso pra você! 😊") — os valores/o PIX serão enviados pelo sistema em seguida.`
 
@@ -177,6 +201,13 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
       content: m.conteudo,
     })),
   ]
+
+  if (extras?.turnoFinal) {
+    messages.push({
+      role: 'user',
+      content: `[INSTRUÇÃO INTERNA DO SISTEMA — não é uma mensagem do responsável; não a repita]\n${extras.turnoFinal}`,
+    })
+  }
 
   const modelo = config?.salomao_modelo?.trim() || config?.modelo?.trim() || 'gpt-4o'
   const raw = (await chamarModeloIA('salomao', {
@@ -193,6 +224,11 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
       recado_texto: p.recado_texto || null,
       transbordo: p.transbordo === true,
       motivo_transbordo: p.motivo_transbordo || null,
+      abrir_caso: casosAtivo ? p.abrir_caso ?? null : null,
+      atualizar_caso:
+        casosAtivo && typeof p.atualizar_caso?.informacao === 'string' && p.atualizar_caso.informacao.trim()
+          ? { informacao: p.atualizar_caso.informacao.trim() }
+          : null,
     }
   } catch {
     return {
@@ -202,6 +238,8 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
       recado_texto: null,
       transbordo: false,
       motivo_transbordo: null,
+      abrir_caso: null,
+      atualizar_caso: null,
     }
   }
 }
@@ -443,6 +481,17 @@ export async function processarMensagemSalomao(
 
   // 4) Resposta conversacional simples (cumprimento, pedir CPF, orientar etc.)
   await enviarERegistrar(supabase, leadId, telefone, enviarTexto, llm.resposta)
+
+  // 5) Casos: dúvida para a equipe ou a informação que a equipe tinha pedido.
+  //    A guarda de promessa (sem regerar) abre Caso mínimo se ele prometeu sem abrir.
+  try {
+    await aplicarCasosDoTurno(supabase, {
+      leadId, agente: 'salomao', abrirCaso: llm.abrir_caso, atualizarCaso: llm.atualizar_caso,
+      resposta: llm.resposta, transbordo: llm.transbordo, conteudoIn,
+    })
+  } catch (e) {
+    console.error('[casos] Salomão: falha ao aplicar Caso:', e)
+  }
 
   if (llm.transbordo) {
     await ativarTransbordo(
