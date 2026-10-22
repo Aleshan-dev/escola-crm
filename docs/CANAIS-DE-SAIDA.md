@@ -44,8 +44,11 @@ retomada, convites). Mensagens anteriores a 22/10/2026 ficam `NULL`.
 
 - **Cloud:** `X-Hub-Signature-256` validado com `WHATSAPP_APP_SECRET` (ou
   `META_APP_SECRET`). Recibos (`statuses`) nunca rebaixam o status.
-- **WAHA:** `?secret=` opcional (`WAHA_WEBHOOK_SECRET`). Evento de **outra sessão** é
-  recusado (trilha `rejeitado` + alerta): responder sairia pelo número da sessão configurada.
+- **WAHA:** `?secret=` opcional (`WAHA_WEBHOOK_SECRET`). Grupo, story e newsletter são
+  descartados antes de tudo. Mensagem de **outra sessão** (ex.: o chip `Salomao-crm`) entra no
+  CRM em modo só-registro (`processarMensagemRecebida({ somenteRegistrar })`): sem IA, sem
+  mudar `familias.canal_whatsapp`, e um alerta de engajamento em /pendentes para a equipe
+  responder pelo próprio chip — a resposta automática sairia pela sessão configurada.
 - **Evolution:** segredo opcional (`EVOLUTION_WEBHOOK_SECRET`, `?secret=` ou `apikey`),
   instância precisa ser a de `EVOLUTION_INSTANCE_NAME`. A resposta sai pelo Evolution
   direto — antes saía pela flag (WAHA), outro número.

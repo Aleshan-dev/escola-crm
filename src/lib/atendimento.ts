@@ -21,6 +21,7 @@ import { aplicarMemoriaDoTurno } from '@/lib/memoria/servico'
 import { INSTRUCAO_REFORCO, detectaPromessaHumana, modoGuarda } from '@/lib/casos/guarda-promessa'
 import { validarAbertura } from '@/lib/casos/regras'
 import { normalizarCelular } from '@/lib/telefone'
+import { registrarAlerta } from '@/lib/alertas'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -114,9 +115,13 @@ async function juntarBaloesRecebidos(
  */
 export async function registrarMensagemManual(
   supabase: SupaAdmin,
-  params: { telefone: string; conteudo: string; wid: string; canal?: Canal; canalRef?: string | null }
+  params: {
+    telefone: string; conteudo: string; wid: string; canal?: Canal; canalRef?: string | null
+    /** false = só carimba a mensagem; a conversa NÃO passa a sair por este canal. */
+    carimbarFamilia?: boolean
+  }
 ): Promise<string> {
-  const { telefone, conteudo, wid, canal, canalRef } = params
+  const { telefone, conteudo, wid, canal, canalRef, carimbarFamilia = true } = params
 
   if (wid) {
     const { data: jaExiste } = await supabase
@@ -155,7 +160,7 @@ export async function registrarMensagemManual(
     ...(canal ? { canal_whatsapp: canal, canal_ref: canalRef ?? null } : {}),
   })
   // A conversa segue no canal por onde a equipe respondeu.
-  if (canal) await supabase.from('familias').update({ canal_whatsapp: canal }).eq('id', fam.id)
+  if (canal && carimbarFamilia) await supabase.from('familias').update({ canal_whatsapp: canal }).eq('id', fam.id)
 
   if (lead.ia_ativa) {
     await supabase.from('leads').update({ ia_ativa: false }).eq('id', lead.id)
@@ -196,9 +201,16 @@ export async function processarMensagemRecebida(
     canalRef?: string | null
     /** Id da mensagem que esta cita (responder no WhatsApp) — usado pelas respostas de Caso. */
     citadoWid?: string | null
+    /**
+     * Só registra: grava a mensagem e cria um alerta para a equipe responder à mão,
+     * sem IA e sem mudar o canal da conversa. Para mensagens de uma conexão pela
+     * qual o CRM não responde (ex.: outro chip WAHA) — a resposta automática sairia
+     * por outro número.
+     */
+    somenteRegistrar?: { motivo: string }
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio, canalRef, citadoWid } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio, canalRef, citadoWid, somenteRegistrar } = params
   const carimbo: CarimboCanal | null = canalEnvio ? { canal_whatsapp: canalEnvio, canal_ref: canalRef ?? null } : null
 
   // Idempotência: se este wid já foi processado (retry do webhook / upsert duplicado),
@@ -224,6 +236,7 @@ export async function processarMensagemRecebida(
   // família/lead nem roda IA. O que não for resposta de Caso segue como sempre.
   const cfgCasosEntrada = await lerConfigCasos(supabase)
   if (
+    !somenteRegistrar &&
     cfgCasosEntrada.ativo &&
     cfgCasosEntrada.comandosWhatsapp &&
     cfgCasosEntrada.telefoneAviso &&
@@ -292,7 +305,7 @@ export async function processarMensagemRecebida(
   }
   // Canal da conversa = onde o lead acabou de escrever. É o que a política de
   // saída (src/lib/canais) usa para responder, follow-up e envio manual.
-  if (canalEnvio) {
+  if (canalEnvio && !somenteRegistrar) {
     await supabase.from('familias').update({ canal_whatsapp: canalEnvio }).eq('id', familia.id)
   }
 
@@ -349,6 +362,17 @@ export async function processarMensagemRecebida(
     .from('leads')
     .update({ ultima_interacao_em: new Date().toISOString(), followup_count: 0, followup_status: 'ativo', precisa_template: false })
     .eq('id', lead.id)
+
+  if (somenteRegistrar) {
+    const nome = familia.nome_responsavel || pushName || 'Família'
+    await registrarAlerta(
+      supabase,
+      'conexao-sem-resposta',
+      `${nome} (${telefone}) escreveu por ${somenteRegistrar.motivo}. A IA não responde por essa conexão: responda manualmente por ela.\n\n"${conteudo.slice(0, 300)}"`,
+      { tipo: 'engajamento', leadId: lead.id },
+    )
+    return 'registrado_sem_resposta'
+  }
 
   // Salomão (atendimento a matriculados) — kill switch: config_ia.salomao_ativo.
   // Desligado => comportamento legado (pausa + atendimento humano).

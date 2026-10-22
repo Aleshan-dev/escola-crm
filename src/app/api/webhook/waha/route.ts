@@ -24,7 +24,8 @@ import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere }
 //
 // Registro do webhook no WAHA: ver /api/waha/webhook-register (ou o botão na tela).
 // Middleware libera /api/webhook/* sem sessão; opcionalmente exige ?secret=<WAHA_WEBHOOK_SECRET>.
-// Evento de OUTRA sessão WAHA é rejeitado (não é a conexão que configuramos).
+// Evento de OUTRA sessão WAHA (outro chip) entra no CRM SEM resposta automática:
+// a resposta sairia pela sessão configurada, um número diferente do que o lead usou.
 // Toda mensagem fica na trilha crm.webhook_eventos (src/lib/canais/webhook.ts).
 
 export const maxDuration = 60
@@ -62,21 +63,12 @@ export async function POST(req: NextRequest) {
     const p = body?.payload || {}
     const sessao: string | null = typeof body?.session === 'string' ? body.session : null
 
-    // Evento de OUTRA sessão (outro chip apontando para esta URL): não entra na
-    // conversa — a resposta sairia pela sessão configurada, um número diferente do
-    // que o lead usou. Fica na trilha com o payload (dá para reprocessar) e vira
-    // alerta. 200 para o WAHA não reenviar.
+    // Evento de OUTRA sessão (outro chip apontando para esta URL, ex.: Salomao-crm):
+    // a mensagem entra no CRM, mas SEM IA e sem mudar o canal da conversa — a
+    // resposta automática sairia pela sessão configurada, outro número. Vira alerta
+    // para a equipe responder pelo próprio chip.
     const { session: sessaoConfigurada } = await getWahaConfig()
-    if (!conexaoConfere(sessao, sessaoConfigurada)) {
-      if (event !== 'message.ack') {
-        await registrarWebhook(supabase, {
-          canal: 'waha', canalRef: sessao, evento: event, externalId: widDe(p?.id), resultado: 'rejeitado',
-          detalhe: `sessão ${sessao} ≠ configurada ${sessaoConfigurada}`, payload: body,
-        })
-        await registrarAlerta(supabase, 'webhook/waha', `Evento da sessão WAHA "${sessao}", mas a configurada é "${sessaoConfigurada}". Mensagem NÃO entrou no CRM (ver crm.webhook_eventos).`)
-      }
-      return NextResponse.json({ ignored: 'sessao diferente da configurada', sessao })
-    }
+    const outraSessao = !conexaoConfere(sessao, sessaoConfigurada)
     const canalRef = sessao || sessaoConfigurada
 
     // ── Recibos de entrega (ack): entregue (✓✓) / lido (✓✓ azul) ──────────────
@@ -111,7 +103,7 @@ export async function POST(req: NextRequest) {
     const trilha = { canal: 'waha' as const, canalRef, evento: event, externalId: widDe(p?.id), payload: body }
 
     const from: string = p?.from || ''
-    // Ignora grupos, status/stories e newsletters.
+    // Ignora grupos, status/stories e newsletters (de qualquer sessão, antes de tudo).
     if (!from || from.includes('@g.us') || from.includes('@broadcast') || from.includes('@newsletter')) {
       await registrarWebhook(supabase, { ...trilha, resultado: 'descartado', detalhe: 'grupo/status/sem from' })
       return NextResponse.json({ ignored: 'grupo/status/sem from' })
@@ -138,7 +130,9 @@ export async function POST(req: NextRequest) {
     // fromMe: mensagem saída do próprio número (Sara via API ou resposta manual no celular).
     if (p?.fromMe === true) {
       const conteudoOut = texto || '[mídia]'
-      const status = await registrarMensagemManual(supabase, { telefone, conteudo: conteudoOut, wid, canal: 'waha', canalRef })
+      const status = await registrarMensagemManual(supabase, {
+        telefone, conteudo: conteudoOut, wid, canal: 'waha', canalRef, carimbarFamilia: !outraSessao,
+      })
       await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
       return NextResponse.json({ ok: true, fromMe: status })
     }
@@ -172,6 +166,7 @@ export async function POST(req: NextRequest) {
           enviarTexto: enviarWaha,
           canalEnvio: 'waha',
           canalRef,
+          somenteRegistrar: outraSessao ? { motivo: `o chip WAHA "${sessao}"` } : undefined,
           canal: 'organico',
           tipoMidia,
           urlMidia,
@@ -180,7 +175,8 @@ export async function POST(req: NextRequest) {
           citadoWid: p?.replyTo?.id || p?._data?.quotedStanzaID || null,
         })
         // O canal do contato (familias.canal_whatsapp = 'waha') é carimbado dentro de
-        // processarMensagemRecebida, pela família — não pelo telefone cru.
+        // processarMensagemRecebida, pela família — não pelo telefone cru (outra
+        // sessão não carimba: a conversa continua no canal em que já estava).
         await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
 
         // Corrige o nome de leads que ficaram como "Família" (criados antes de
