@@ -29,10 +29,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ age
   try {
     if (agente === 'sara') {
       const r = await gerarRespostaSara(leadId, undefined, undefined, undefined, override)
-      return NextResponse.json({ resposta: r.resposta, transbordo: r.transbordo, analise: r.analise })
+      return NextResponse.json({ resposta: r.resposta, transbordo: r.transbordo, analise: r.analise, abrir_caso: r.abrir_caso })
     }
     const r = await gerarRespostaSalomaoLLM(db, leadId, undefined, 0, override)
-    return NextResponse.json({ resposta: r.resposta, transbordo: r.transbordo, acao: r.acao })
+    return NextResponse.json({ resposta: r.resposta, transbordo: r.transbordo, acao: r.acao, abrir_caso: r.abrir_caso })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Erro ao testar' }, { status: 500 })
   }

@@ -1,15 +1,8 @@
 > [!IMPORTANT]
-> **⚠️ MIGRAÇÃO EM ANDAMENTO — a base ATIVA mudou de pasta.**
+> **Esta pasta é a base ATIVA** (`Aleshan-dev/escola-crm`, no ar na Vercel).
 >
-> O trabalho novo do CRM da escola vive agora no **fork do DeskcommCRM**, em
-> `D:\Claude\Projects\CRM ESCOLA 2 (main)` (branch `escola/vercel`), com o
-> `CLAUDE.local.md` de lá como orientação.
->
-> **Esta pasta (`CRM Escola`) é o sistema ANTIGO** (`Aleshan-dev/escola-crm`, ainda
-> no ar na Vercel), em aposentadoria. Só edite/deploye aqui para **patch do legado**.
-> Todo o resto (fluxos, agentes, dados de staging, overlay) é no fork.
->
-> O texto abaixo ("pasta única, fonte de verdade") vale para ESTE sistema antigo —
-> não deixe ele te levar a fazer o trabalho da migração na pasta errada.
+> Em 15/10/2026 a migração para o fork do DeskcommCRM (`D:\Claude\Projects\CRM ESCOLA 2 (main)`)
+> foi REVERTIDA: o trabalho novo (Maestro, roteador, proteção de envio, Casos…) é feito aqui,
+> trazendo do DeskcommCRM só as ideias. Não trabalhe no fork.
 
 @AGENTS.md
