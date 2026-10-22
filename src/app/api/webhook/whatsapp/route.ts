@@ -171,6 +171,11 @@ export async function POST(req: NextRequest) {
           canal: ad ? 'meta-ads' : 'organico',
           campanha: ad ? ad.title || ad.sourceId || null : null,
           referral: ad || null,
+          // Mensagem citada (responder no WhatsApp) — respostas de Caso da equipe.
+          citadoWid:
+            data?.message?.extendedTextMessage?.contextInfo?.stanzaId ||
+            data?.contextInfo?.stanzaId ||
+            null,
         })
       } catch (e) {
         console.error('Webhook (after) erro:', e)

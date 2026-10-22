@@ -215,6 +215,8 @@ export async function POST(req: NextRequest) {
           phoneNumberId,
           tipoMidia,
           urlMidia,
+          // Mensagem citada (responder no WhatsApp) — respostas de Caso da equipe.
+          citadoWid: msg.context?.id || null,
         })
         // Canal do contato = Cloud (o lead escreveu pelo número oficial). Mantém o
         // roteamento de saída seguindo o último canal usado pelo lead.

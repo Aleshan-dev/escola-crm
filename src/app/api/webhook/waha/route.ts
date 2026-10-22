@@ -148,6 +148,9 @@ export async function POST(req: NextRequest) {
           canal: 'organico',
           tipoMidia,
           urlMidia,
+          // Mensagem citada (responder no WhatsApp) — respostas de Caso da equipe.
+          // WAHA traz o id curto em replyTo.id (o motor WEBJS também em _data).
+          citadoWid: p?.replyTo?.id || p?._data?.quotedStanzaID || null,
         })
         // Marca o canal do contato: a saída (manual e automática) deve sair pelo
         // WAHA — o mesmo número onde o lead escreveu. (Diferente do `canal` acima,

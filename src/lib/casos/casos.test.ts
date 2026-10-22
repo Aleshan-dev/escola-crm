@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   TRANSICAO_EQUIPE, blocoCasoAberto, estaAberto, instrucaoRetorno, normalizarTipo, validarAbertura, validarNota,
 } from './regras'
-import { interpretarComando, pareceComando } from './comandos'
+import { interpretarComando, interpretarRespostaEquipe, pareceComando, stanzaDe } from './comandos'
 import { detectaPromessaHumana, modoGuarda } from './guarda-promessa'
 import { textoAviso } from './servico'
 
@@ -106,6 +106,66 @@ describe('comandos #C', () => {
 
   it('não é comando', () => {
     expect(interpretarComando('bom dia')).toBeNull()
+  })
+})
+
+describe('resposta da equipe — citando o aviso', () => {
+  const citado = { numeroCitado: 12, esperando: [12, 15] }
+
+  it('texto livre conclui o Caso citado com aquele texto', () => {
+    expect(interpretarRespostaEquipe('Tem vaga sim, pode vir quinta', citado))
+      .toEqual({ numero: 12, acao: 'concluir', nota: 'Tem vaga sim, pode vir quinta' })
+  })
+
+  it.each([
+    ['pedir qual a data de nascimento?', { numero: 12, acao: 'pedir_info', nota: 'qual a data de nascimento?' }],
+    ['Humano', { numero: 12, acao: 'escalar', nota: '' }],
+    ['ok, pode vir amanhã', { numero: 12, acao: 'concluir', nota: 'pode vir amanhã' }],
+    ['Concluído: matrícula liberada', { numero: 12, acao: 'concluir', nota: 'matrícula liberada' }],
+  ])('verbo no começo escolhe a ação: %j', (txt, esperado) => {
+    expect(interpretarRespostaEquipe(txt, citado)).toEqual(esperado)
+  })
+
+  it('o código explícito vence a citação', () => {
+    expect(interpretarRespostaEquipe('#C15 ok outra coisa', citado)).toEqual({ numero: 15, acao: 'concluir', nota: 'outra coisa' })
+  })
+})
+
+describe('resposta da equipe — sem citação e sem código', () => {
+  it('com verbo e UM Caso esperando, vale para ele', () => {
+    expect(interpretarRespostaEquipe('ok tem vaga', { numeroCitado: null, esperando: [7] }))
+      .toEqual({ numero: 7, acao: 'concluir', nota: 'tem vaga' })
+  })
+
+  it('sem verbo não é resposta de Caso (segue o fluxo normal)', () => {
+    expect(interpretarRespostaEquipe('bom dia, tudo certo?', { numeroCitado: null, esperando: [7] })).toBeNull()
+  })
+
+  it('com verbo e vários Casos esperando, pede o código', () => {
+    const r = interpretarRespostaEquipe('ok tem vaga', { numeroCitado: null, esperando: [7, 9] })
+    expect(r && 'erro' in r && r.erro).toContain('#C7, #C9')
+  })
+
+  it('com verbo e nenhum Caso esperando, avisa', () => {
+    const r = interpretarRespostaEquipe('ok', { numeroCitado: null, esperando: [] })
+    expect(r && 'erro' in r).toBe(true)
+  })
+
+  it('"okay"/"pedido" não são verbos', () => {
+    expect(interpretarRespostaEquipe('okay, depois falamos', { numeroCitado: null, esperando: [7] })).toBeNull()
+    expect(interpretarRespostaEquipe('pedido de material chegou', { numeroCitado: null, esperando: [7] })).toBeNull()
+  })
+})
+
+describe('stanzaDe — id curto da mensagem citada', () => {
+  it.each([
+    ['true_124472547917933@lid_3EB0AE0BEA423DB6E40CAD', '3EB0AE0BEA423DB6E40CAD'],
+    ['false_556899999999@c.us_ABCDEF', 'ABCDEF'],
+    ['3EB0AE0BEA423DB6E40CAD', '3EB0AE0BEA423DB6E40CAD'],
+    ['wamid.HBgMNTU2ODk5OTk5OTk5FQIAERgSQ0Q=', 'wamid.HBgMNTU2ODk5OTk5OTk5FQIAERgSQ0Q='],
+    [null, ''],
+  ])('%s → %s', (wid, esperado) => {
+    expect(stanzaDe(wid)).toBe(esperado)
   })
 })
 

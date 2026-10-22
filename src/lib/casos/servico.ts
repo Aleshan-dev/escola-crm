@@ -13,7 +13,7 @@ import {
   ESTADOS_ABERTOS, TRANSICAO_EQUIPE, validarNota,
   type AcaoEquipe, type AgenteCaso, type EstadoCaso, type OrigemCaso, type PedidoAbertura,
 } from './regras'
-import { AJUDA, interpretarComando } from './comandos'
+import { interpretarRespostaEquipe, stanzaDe, type ComandoCaso } from './comandos'
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
 
@@ -243,7 +243,9 @@ export function textoAviso(
   const cod = `#C${caso.numero}`
   const fam = opts.familia ? `\nFamília: ${opts.familia}` : ''
   const ajuda = opts.comandos
-    ? `\n\nResponda aqui:\n${cod} ok <resposta para a família>\n${cod} pedir <o que perguntar>\n${cod} humano`
+    ? `\n\nPara responder, cite esta mensagem (responder no WhatsApp) e escreva a resposta para a família.\n` +
+      `Começando com "pedir", a IA pergunta à família; "humano" passa o atendimento para uma pessoa.\n` +
+      `Ou use o código: ${cod} ok <resposta> | ${cod} pedir <pergunta> | ${cod} humano`
     : '\n\nResponda pelo CRM, na tela Casos.'
   switch (tipo) {
     case 'abertura':
@@ -312,16 +314,59 @@ export async function avisarEquipe(
 
 // ── Comandos #C pelo WhatsApp da equipe ─────────────────────────────────────
 
+/** Número do Caso cujo aviso a mensagem cita (pelo id da mensagem citada). */
+async function casoDoAvisoCitado(supabase: SupaAdmin, citadoWid: string | null | undefined): Promise<number | null> {
+  const stanza = stanzaDe(citadoWid)
+  if (!stanza) return null
+  const { data } = await supabase
+    .from('caso_avisos')
+    .select('wid, caso:casos(numero)')
+    .like('wid', `%${stanza}`)
+    .order('criado_em', { ascending: false })
+    .limit(5)
+  const hit = (data ?? []).find((a: { wid: string | null }) => stanzaDe(a.wid) === stanza) as
+    | { caso: { numero: number } | { numero: number }[] | null }
+    | undefined
+  const caso = Array.isArray(hit?.caso) ? hit?.caso[0] : hit?.caso
+  return caso?.numero ?? null
+}
+
 /**
- * Executa um comando vindo do número de aviso. Devolve o texto de confirmação
- * para a equipe e, quando a ação pede, o id do Caso cujo retorno deve rodar.
+ * Mensagem do número de aviso: interpreta (código, citação do aviso ou Caso único
+ * esperando) e executa. null = não é resposta de Caso — segue o fluxo normal.
+ * Devolve o texto de confirmação para a equipe e, quando a ação pede, o id do
+ * Caso cujo retorno deve rodar.
  */
-export async function executarComando(
+export async function executarRespostaEquipe(
   supabase: SupaAdmin,
-  texto: string
+  texto: string,
+  citadoWid?: string | null,
+  /** Id desta mensagem: reentrega do webhook não executa (nem confirma) duas vezes. */
+  wid?: string | null
+): Promise<{ resposta: string; retornoCasoId: string | null } | null> {
+  if (wid) {
+    const { data: ja } = await supabase
+      .from('caso_eventos').select('id').eq('tipo', 'comando_whatsapp').contains('detalhe', { wid }).limit(1)
+    if (ja && ja.length > 0) return { resposta: '', retornoCasoId: null }
+  }
+  const [numeroCitado, { data: esperando }] = await Promise.all([
+    casoDoAvisoCitado(supabase, citadoWid),
+    supabase.from('casos').select('numero').eq('estado', 'aguardando_equipe').order('numero'),
+  ])
+  const cmd = interpretarRespostaEquipe(texto, {
+    numeroCitado,
+    esperando: (esperando ?? []).map((c: { numero: number }) => c.numero),
+  })
+  if (!cmd) return null
+  return executarComando(supabase, cmd, wid ?? null)
+}
+
+/** Executa um comando já interpretado (ou devolve o erro de interpretação). */
+async function executarComando(
+  supabase: SupaAdmin,
+  cmd: ComandoCaso | { erro: string },
+  wid: string | null
 ): Promise<{ resposta: string; retornoCasoId: string | null }> {
-  const cmd = interpretarComando(texto)
-  if (!cmd) return { resposta: AJUDA('12'), retornoCasoId: null }
   if ('erro' in cmd) return { resposta: cmd.erro, retornoCasoId: null }
 
   const { data: caso } = await supabase.from('casos').select('id').eq('numero', cmd.numero).maybeSingle()
@@ -330,7 +375,7 @@ export async function executarComando(
   const r = await acaoEquipe(supabase, { casoId: caso.id, acao: cmd.acao, nota: cmd.nota, ator: 'whatsapp' })
   if (!r.ok) return { resposta: `#C${cmd.numero}: ${r.erro}`, retornoCasoId: null }
 
-  await supabase.from('caso_eventos').insert({ caso_id: caso.id, tipo: 'comando_whatsapp', ator: 'whatsapp', detalhe: { acao: cmd.acao } })
+  await supabase.from('caso_eventos').insert({ caso_id: caso.id, tipo: 'comando_whatsapp', ator: 'whatsapp', detalhe: { acao: cmd.acao, ...(wid ? { wid } : {}) } })
   const feito = cmd.acao === 'concluir'
     ? 'concluído — a IA vai avisar a família.'
     : cmd.acao === 'pedir_info'

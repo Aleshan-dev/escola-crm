@@ -97,7 +97,12 @@ export default function CasosConfigPage() {
 
             <label className="flex items-start gap-2 text-sm text-slate-700">
               <input type="checkbox" className="mt-1" checked={comandos} onChange={(e) => setComandos(e.target.checked)} />
-              <span>Responder Casos pelo WhatsApp<br /><span className="text-xs text-slate-500">Desse número, mensagens como <code>#C12 ok tem vaga</code>, <code>#C12 pedir qual o turno?</code> ou <code>#C12 humano</code> decidem o Caso.</span></span>
+              <span>Responder Casos pelo WhatsApp<br /><span className="text-xs text-slate-500">
+                Desse número, para o WhatsApp da escola: <b>cite o aviso</b> (responder) e escreva a resposta para a família — a IA repassa e o Caso é concluído.
+                Começando com <code>pedir</code>, a IA pergunta à família; <code>humano</code> passa para uma pessoa.
+                Sem citar, vale <code>ok …</code> / <code>pedir …</code> / <code>humano</code> quando há um único Caso esperando, ou o código <code>#C12 ok …</code>.
+                Mensagens sem nada disso seguem como conversa normal.
+              </span></span>
             </label>
 
             <label className="block border-t border-slate-100 pt-4">

@@ -14,8 +14,7 @@ import { encaminharParaHumano, resolverTurno } from '@/lib/roteador/turno'
 import { protegerEnviarTexto } from '@/lib/envio/portao'
 import type { Canal } from '@/lib/envio/defaults'
 import { dividirEmBaloes } from '@/lib/baloes'
-import { pareceComando } from '@/lib/casos/comandos'
-import { cancelarCasoDoLead, casoAbertoDoLead, executarComando, lerConfigCasos } from '@/lib/casos/servico'
+import { cancelarCasoDoLead, casoAbertoDoLead, executarRespostaEquipe, lerConfigCasos } from '@/lib/casos/servico'
 import { executarRetornoCaso } from '@/lib/casos/retorno'
 import { aplicarCasosDoTurno } from '@/lib/casos/turno'
 import { INSTRUCAO_REFORCO, detectaPromessaHumana, modoGuarda } from '@/lib/casos/guarda-promessa'
@@ -194,9 +193,11 @@ export async function processarMensagemRecebida(
     urlMidia?: string | null // caminho do arquivo no storage (bucket 'midias')
     /** Número físico por onde a resposta sai — liga o portão de envio (src/lib/envio). */
     canalEnvio?: Canal
+    /** Id da mensagem que esta cita (responder no WhatsApp) — usado pelas respostas de Caso. */
+    citadoWid?: string | null
   }
 ): Promise<string> {
-  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio } = params
+  const { telefone, conteudo, pushName, wid, origem, tag, enviarTexto, canal, campanha, referral, phoneNumberId, tipoMidia, urlMidia, canalEnvio, citadoWid } = params
 
   // Idempotência: se este wid já foi processado (retry do webhook / upsert duplicado),
   // não registra de novo nem roda a Sara — evita respostas duplicadas. Rede de
@@ -215,15 +216,21 @@ export async function processarMensagemRecebida(
   // cru fazia o mesmo responsável virar duas famílias/leads.
   const telNorm = normalizarCelular(telefone)
 
-  // CASOS — comando da equipe pelo WhatsApp ("#C12 ok ..."), vindo do número de
-  // aviso. Sai do fluxo normal: não cria família/lead nem roda IA. Mensagem desse
-  // número que não é comando segue o fluxo de sempre.
-  if (pareceComando(conteudo)) {
-    const cfgCasos = await lerConfigCasos(supabase)
-    if (cfgCasos.ativo && cfgCasos.comandosWhatsapp && cfgCasos.telefoneAviso && normalizarCelular(cfgCasos.telefoneAviso) === telNorm) {
-      const { resposta, retornoCasoId } = await executarComando(supabase, conteudo)
-      await enviarTexto(telefone, resposta).catch((e) => console.error('[casos] resposta ao comando falhou:', e))
-      if (retornoCasoId) await executarRetornoCaso(retornoCasoId, supabase)
+  // CASOS — resposta da equipe pelo WhatsApp, vinda do número de aviso: com código
+  // ("#C12 ok ..."), citando o aviso, ou com verbo quando há um único Caso
+  // esperando (src/lib/casos/comandos.ts). Sai do fluxo normal: não cria
+  // família/lead nem roda IA. O que não for resposta de Caso segue como sempre.
+  const cfgCasosEntrada = await lerConfigCasos(supabase)
+  if (
+    cfgCasosEntrada.ativo &&
+    cfgCasosEntrada.comandosWhatsapp &&
+    cfgCasosEntrada.telefoneAviso &&
+    normalizarCelular(cfgCasosEntrada.telefoneAviso) === telNorm
+  ) {
+    const r = await executarRespostaEquipe(supabase, conteudo, citadoWid, wid)
+    if (r) {
+      if (r.resposta) await enviarTexto(telefone, r.resposta).catch((e) => console.error('[casos] confirmação à equipe falhou:', e))
+      if (r.retornoCasoId) await executarRetornoCaso(r.retornoCasoId, supabase)
       return 'comando_caso'
     }
   }

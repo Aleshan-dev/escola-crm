@@ -73,17 +73,24 @@ A Sara vê no prompt o Caso aberto do lead. Enquanto houver Caso aberto, o gatil
 - **Fora do portão anti-ban:** o aviso vai para um número interno, como o `notificarGestor`.
 - **Horário:** a cobrança e o reprocessamento de retornos só rodam em horário comercial (`dentroHorarioComercial`).
 
-### Comandos pelo WhatsApp
+### Respostas pelo WhatsApp
 
-Só valem com `casos_comandos_whatsapp` ligado e quando a mensagem vem do número de aviso:
+Só valem com `casos_comandos_whatsapp` ligado e quando a mensagem vem do número de aviso. A interpretação está em `src/lib/casos/comandos.ts` (`interpretarRespostaEquipe`) e há três formas, da mais forte para a mais fraca:
 
-```
-#C12 ok <resposta para a família>
-#C12 pedir <o que perguntar à família>
-#C12 humano
-```
+1. **Com código:** `#C12 ok <resposta>`, `#C12 pedir <pergunta>` ou `#C12 humano`. O código explícito vence as outras formas.
+2. **Citando o aviso** (o "responder" do WhatsApp em qualquer aviso do Caso: abertura, cobrança ou "família respondeu"):
+   - um texto livre **conclui** o Caso com esse texto;
+   - começando com `pedir` ou `humano`, a mensagem escolhe a outra ação.
 
-O comando sai do fluxo normal: não cria família nem roda a IA. Mensagem desse número que não é comando segue o fluxo de sempre.
+   O webhook manda o id da mensagem citada (`citadoWid`): Cloud em `context.id`, Evolution em `contextInfo.stanzaId`, WAHA em `replyTo.id`. Esse id é casado com `caso_avisos.wid` pelo id curto (`stanzaDe`), porque o WAHA grava o id serializado e cita só o curto.
+3. **Sem código e sem citação:** só com o verbo no começo (`ok …`, `pedir …`, `humano`) e só se houver **um** Caso em "aguardando equipe". Com dois ou mais, o sistema pede o código ou a citação.
+
+Texto sem nenhuma dessas formas segue o fluxo normal, porque o número de aviso costuma ser o do gestor, que também fala com a escola por outros motivos.
+
+Outros detalhes:
+- A resposta da equipe sai do fluxo normal: não cria família nem roda a IA.
+- A equipe recebe uma confirmação ("✅ #C12 …") ou o erro.
+- Uma reentrega do webhook não executa duas vezes: o `wid` da mensagem fica no evento `comando_whatsapp`.
 
 ### Guarda de promessa (`casos_guarda_promessa`)
 
