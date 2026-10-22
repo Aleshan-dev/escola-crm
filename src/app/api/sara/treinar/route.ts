@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import OpenAI from 'openai'
 import { createClient, createServerAdminClient } from '@/lib/supabase-server'
+import { chamarModeloIA } from '@/lib/ia-credenciais'
 
 // Canal "Treinar a Sara": o diretor conversa com a Sara para orientá-la.
 // A Sara PLANEJA, PROPÕE e só grava depois do "confirma".
@@ -15,11 +15,9 @@ type PlanoConhecimento = { tipo: 'conhecimento'; categoria: string; pergunta: st
 type PlanoRegra = { tipo: 'regra'; texto_regra: string }
 type PlanoItem = PlanoConhecimento | PlanoRegra
 
-let _openai: OpenAI | null = null
-function getOpenAI(): OpenAI {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  return _openai
-}
+// O treino roda sempre no Gemini, pela credencial Gemini cadastrada em
+// ia_credenciais (independe do provedor que a Sara usa no atendimento).
+const MODELO_TREINO = 'gemini-3.5-flash-lite'
 
 function normalizarPlano(raw: unknown): PlanoItem[] {
   if (!Array.isArray(raw)) return []
@@ -58,8 +56,8 @@ export async function POST(req: NextRequest) {
     const mensagem = typeof body?.mensagem === 'string' ? body.mensagem.trim() : ''
     if (!mensagem) return NextResponse.json({ error: 'mensagem obrigatória' }, { status: 400 })
 
-    const [{ data: config }, { data: kb }, { data: regras }, { data: hist }] = await Promise.all([
-      admin.from('config_ia').select('system_prompt, modelo').eq('id', 1).maybeSingle(),
+    const [{ data: credGemini }, { data: kb }, { data: regras }, { data: hist }] = await Promise.all([
+      admin.from('ia_credenciais').select('id').eq('provedor', 'gemini').limit(1).maybeSingle(),
       admin.from('base_conhecimento').select('categoria, pergunta, resposta').eq('ativa', true),
       admin.from('regras_aprendidas').select('texto_regra').eq('ativa', true),
       admin
@@ -105,18 +103,19 @@ Responda ESTRITAMENTE em JSON no formato:
       { role: 'user', content: mensagem },
     ]
 
-    const modelo = config?.modelo?.startsWith('gpt') ? config.modelo : 'gpt-4o'
+    if (!credGemini?.id) {
+      return NextResponse.json({ error: 'Nenhuma credencial Gemini cadastrada em Configurações → Credenciais.' }, { status: 500 })
+    }
 
     let resposta = 'Desculpe, não consegui processar agora.'
     let plano: PlanoItem[] = []
     try {
-      const response = await getOpenAI().chat.completions.create({
-        model: modelo,
-        max_tokens: 900,
-        response_format: { type: 'json_object' },
-        messages,
-      })
-      const parsed = JSON.parse(response.choices[0]?.message?.content || '{}')
+      const texto = await chamarModeloIA(
+        'sara',
+        { messages, model: MODELO_TREINO, maxTokens: 900, jsonMode: true, credencialId: credGemini.id },
+        admin
+      )
+      const parsed = JSON.parse(texto || '{}')
       if (typeof parsed.resposta === 'string' && parsed.resposta.trim()) resposta = parsed.resposta.trim()
       plano = normalizarPlano(parsed.plano)
     } catch (e) {
