@@ -430,7 +430,7 @@ ${casosAtivo
   ? '- Se a pergunta NÃO puder ser respondida com os dados acima: preencha "abrir_caso" (ver seção própria) e diga à família que vai confirmar e retorna em breve.'
   : '- Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"'}
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
-- O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
+- O endereço correto é: Rua Aloísio de Azevedo, nº 114, Bairro Floresta, Rio Branco – Acre.
 
 ${resolverDiretrizes(config)}
 ${blocoConfig}

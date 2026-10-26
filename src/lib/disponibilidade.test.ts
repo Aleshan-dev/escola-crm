@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { gerarSlots, acreWallToUtc, labelAcre, type HorarioVisita } from './disponibilidade'
+import { gerarSlots, acreWallToUtc, labelAcre, dentroDaJanelaVisita, type HorarioVisita } from './disponibilidade'
 
 const DIAS = [
   'Domingo',
@@ -99,5 +99,23 @@ describe('gerarSlots', () => {
 
   it('retorna vazio quando não há janelas configuradas', () => {
     expect(gerarSlots([], [], agora)).toEqual([])
+  })
+})
+
+describe('dentroDaJanelaVisita (blindagem de fuso)', () => {
+  // Grade real: terça-feira 07:30–17:00 (27/10/2026 é terça).
+  const dia = nomeDia(2026, 9, 27)
+  const grade: HorarioVisita[] = [{ dia_semana: dia, hora_inicio: '07:30:00', hora_fim: '17:00:00' }]
+
+  it('aceita um horário dentro da grade (08:00 Acre = 13:00Z)', () => {
+    expect(dentroDaJanelaVisita(acreWallToUtc(2026, 9, 27, 8, 0).toISOString(), grade)).toBe(true)
+  })
+
+  it('rejeita o bug de fuso: hora de parede carimbada como UTC (08:00Z = 03:00 Acre)', () => {
+    expect(dentroDaJanelaVisita('2026-10-27T08:00:00.000Z', grade)).toBe(false)
+  })
+
+  it('rejeita um dia sem janela ativa', () => {
+    expect(dentroDaJanelaVisita(acreWallToUtc(2026, 9, 28, 10, 0).toISOString(), grade)).toBe(false)
   })
 })

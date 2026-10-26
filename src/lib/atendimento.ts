@@ -2,7 +2,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 import { completarDadosLead, salvarDadosLead } from '@/lib/dados-lead'
 import { notificarGestor } from '@/lib/notificacoes'
-import { labelAcre } from '@/lib/disponibilidade'
+import { labelAcre, dentroDaJanelaVisita } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
 import { identificarResponsavel } from '@/lib/sgei'
 import { processarMensagemSalomao } from '@/lib/salomao'
@@ -871,6 +871,21 @@ export async function processarMensagemRecebida(
               'visita',
               `📅 *Visita ${reagendou ? 'reagendada' : 'agendada'} pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nQuando: ${labelAcre(dh)}`
             )
+            // Blindagem de fuso (2026-10-26): se o horário caiu FORA da grade de
+            // visitas, é o sintoma clássico do bug "hora de parede carimbada como
+            // UTC" — a visita entra 5h cedo e some da agenda. Avisamos o gestor para
+            // conferir; não reescrevemos, porque a família recebeu uma hora concreta.
+            const { data: gradeAtiva } = await supabase
+              .from('horarios_visita')
+              .select('dia_semana, hora_inicio, hora_fim')
+              .eq('ativo', true)
+            if (gradeAtiva && gradeAtiva.length > 0 && !dentroDaJanelaVisita(dhIso, gradeAtiva)) {
+              await notificarGestor(
+                supabase,
+                'visita',
+                `⚠️ *Confira esta visita* — caiu FORA da grade de visitas.\nFamília: ${familia.nome_responsavel || 'Família'}\nHorário gravado: ${labelAcre(dh)} (Acre)\nPode ser erro de fuso da IA. Ajuste o horário na agenda se preciso.`
+              )
+            }
           }
         }
       }

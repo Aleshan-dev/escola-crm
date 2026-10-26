@@ -206,11 +206,17 @@ export default function AgendamentosPage() {
                       {horas.map((h) => <div key={h} style={{ height: ROW_H }} className="border-b border-slate-50" />)}
                       {eventosDoDia(dia).map((t) => {
                         const dt = new Date(t.data_hora)
-                        const pos = (dt.getHours() + dt.getMinutes() / 60 - HOUR_START) * ROW_H
-                        if (pos < 0 || pos > horas.length * ROW_H) return null
+                        const posBruta = (dt.getHours() + dt.getMinutes() / 60 - HOUR_START) * ROW_H
+                        // NUNCA descartar um evento: uma visita fora da faixa 07–22h
+                        // (muitas vezes por erro de fuso) antes sumia da tela com
+                        // `return null`. Agora prende na borda e marca com ⚠, para o
+                        // gestor ver que existe e conferir o horário.
+                        const maxTop = horas.length * ROW_H - (ROW_H - 6)
+                        const foraDaFaixa = posBruta < 0 || posBruta > maxTop
+                        const pos = Math.max(0, Math.min(posBruta, maxTop))
                         return (
-                          <button key={t.id} onClick={() => setEventoSel(t)} className={`absolute left-1 right-1 rounded-md border px-1.5 py-1 text-[10px] leading-tight overflow-hidden text-left ${corEvento(t)}`} style={{ top: pos, minHeight: ROW_H - 6 }}>
-                            <div className="font-medium truncate">{t.titulo}</div>
+                          <button key={t.id} onClick={() => setEventoSel(t)} title={foraDaFaixa ? 'Horário fora da faixa exibida — confira' : undefined} className={`absolute left-1 right-1 rounded-md border px-1.5 py-1 text-[10px] leading-tight overflow-hidden text-left ${corEvento(t)} ${foraDaFaixa ? 'ring-1 ring-amber-400' : ''}`} style={{ top: pos, minHeight: ROW_H - 6 }}>
+                            <div className="font-medium truncate">{foraDaFaixa ? '⚠ ' : ''}{t.titulo}</div>
                             <div className="opacity-70">{dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
                           </button>
                         )
