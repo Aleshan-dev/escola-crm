@@ -1,7 +1,11 @@
 {
   "crons": [
     { "path": "/api/cron/followup", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/google-watch-renew", "schedule": "0 9 * * *" },
-    { "path": "/api/cron/auditoria-sara", "schedule": "0 11 * * *" }
+    { "path": "/api/cron/heartbeat", "schedule": "*/30 * * * *" },
+    { "path": "/api/cron/convites", "schedule": "*/20 * * * *" },
+    { "path": "/api/cron/salomao-dispatch", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/auditor", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/google-watch-renew", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/google-sync", "schedule": "30 8 * * *" }
   ]
 }

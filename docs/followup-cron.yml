@@ -1,0 +1,29 @@
+name: Sara Follow-up Cron
+
+# Chama o endpoint de follow-up uma vez por hora.
+# No plano Hobby da Vercel o cron nativo (vercel.json) so roda 1x/dia,
+# entao a frequencia horaria precisa vir deste GitHub Action.
+# Requer o secret CRON_SECRET no repo (mesmo valor que o endpoint valida).
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  followup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Chamar endpoint de follow-up
+        run: |
+          RESPONSE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://escola-crm.vercel.app/api/cron/followup)
+          echo "HTTP Status: $RESPONSE"
+          echo "Response body:"
+          cat /tmp/response.txt
+          if [ "$RESPONSE" != "200" ]; then
+            echo "Follow-up falhou"
+            exit 1
+          fi

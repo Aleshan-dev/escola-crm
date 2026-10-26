@@ -25,6 +25,7 @@ export function NewLeadModal({
   const [email, setEmail] = useState('')
   const [criancaNome, setCriancaNome] = useState('')
   const [idade, setIdade] = useState('')
+  const [idadeMeses, setIdadeMeses] = useState('')
   const [saving, setSaving] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
@@ -64,6 +65,7 @@ export function NewLeadModal({
             familia_id: familia.id,
             nome: criancaNome.trim(),
             idade: idade.trim() ? Number(idade) : null,
+            idade_meses: idadeMeses.trim() ? Number(idadeMeses) : null,
           })
           .select('id')
           .single()
@@ -130,7 +132,10 @@ export function NewLeadModal({
             </div>
             <div>
               <span className="mb-1 block text-xs font-medium text-slate-500">Idade</span>
-              <input value={idade} onChange={(e) => setIdade(e.target.value)} className={inputCls} placeholder="opcional" inputMode="numeric" />
+              <div className="flex items-center gap-1">
+                <input value={idade} onChange={(e) => setIdade(e.target.value)} className={inputCls} placeholder="anos" inputMode="numeric" />
+                <input value={idadeMeses} onChange={(e) => setIdadeMeses(e.target.value)} className={inputCls} placeholder="meses" inputMode="numeric" />
+              </div>
             </div>
           </div>
           {erro && <p className="text-sm text-red-600">{erro}</p>}

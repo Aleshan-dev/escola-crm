@@ -15,6 +15,47 @@ function nomeDia(y: number, mo: number, d: number): string {
   return DIAS[new Date(Date.UTC(y, mo, d)).getUTCDay()]
 }
 
+// AUDITORIA CMO 2026-07-29 — regressão da conversa da Gislainy.
+// Às 10h03 a Sara ofereceu visita para 12:30 e 13:30 do MESMO dia (default de
+// antecedenciaMin=120) e as duas opções morreram juntas num "não consigo hoje".
+// O sara.ts passa a chamar com antecedenciaMin=720 e maxPorDia=1.
+describe('slots com os parâmetros que o sara.ts usa', () => {
+  const PARAMS = { quantidade: 2, antecedenciaMin: 720, maxPorDia: 1 }
+  // Janela de visita em todos os dias da semana, 08:00 às 17:00.
+  const horarios: HorarioVisita[] = DIAS.map((d) => ({
+    dia_semana: d,
+    hora_inicio: '08:00',
+    hora_fim: '17:00',
+  }))
+  // Quarta, 29/07/2026, 10:03 em Acre — o instante exato da conversa.
+  const agora = acreWallToUtc(2026, 6, 29, 10, 3).getTime()
+
+  it('NÃO oferece mais nenhum horário no mesmo dia', () => {
+    const slots = gerarSlots(horarios, [], agora, PARAMS)
+    expect(slots).toHaveLength(2)
+    for (const s of slots) {
+      expect(s.label, `slot ${s.label} caiu no mesmo dia`).not.toContain('29/07')
+    }
+  })
+
+  it('distribui as duas opções em DIAS diferentes', () => {
+    const slots = gerarSlots(horarios, [], agora, PARAMS)
+    const dias = slots.map((s) => s.label.match(/\d{2}\/\d{2}/)?.[0])
+    expect(dias[0]).not.toBe(dias[1])
+  })
+
+  it('a primeira opção é no dia seguinte (não esfria o lead)', () => {
+    const slots = gerarSlots(horarios, [], agora, PARAMS)
+    expect(slots[0].label).toContain('30/07')
+  })
+
+  it('com o default antigo, o bug se reproduz (mesmo dia, horários seguidos)', () => {
+    const antigo = gerarSlots(horarios, [], agora, { quantidade: 2 })
+    expect(antigo[0].label).toContain('29/07')
+    expect(antigo[1].label).toContain('29/07')
+  })
+})
+
 describe('fuso de Acre', () => {
   it('converte parede de Acre para UTC (UTC-5)', () => {
     // 09:00 em Acre em 2026-07-02 = 14:00 UTC

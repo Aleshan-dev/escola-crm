@@ -1,5 +1,6 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { enviarTextoWhatsApp, enviarTemplateWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarTemplateWhatsApp } from '@/lib/whatsapp-cloud'
+import { enviarAvisoInterno } from '@/lib/canais/enviar'
 
 // Fallback por template quando o envio livre falha (fora da janela de 24h).
 export type TemplateFallback = { name: string; language?: string; variaveis: string[] }
@@ -7,13 +8,14 @@ export type TemplateFallback = { name: string; language?: string; variaveis: str
 // Notificações proativas para o WhatsApp do gestor (telefone_transbordo em config_ia).
 // Cada tipo tem uma flag liga/desliga; transbordo é sempre enviado (crítico).
 
-export type TipoNotif = 'visita' | 'encerramento' | 'transbordo' | 'sugestao_matricula'
+export type TipoNotif = 'visita' | 'encerramento' | 'transbordo' | 'sugestao_matricula' | 'sugestao_encerramento'
 
 const FLAG_POR_TIPO: Record<TipoNotif, 'notif_visita_agendada' | 'notif_encerramento' | null> = {
   visita: 'notif_visita_agendada',
   encerramento: 'notif_encerramento',
   transbordo: null, // sempre notifica
   sugestao_matricula: null, // sempre notifica (baixa frequência, exige ação do gestor)
+  sugestao_encerramento: null, // sempre notifica (baixa frequência, exige ação do gestor)
 }
 
 export async function notificarGestor(
@@ -37,7 +39,7 @@ export async function notificarGestor(
 
     try {
       // Tenta o envio livre (grátis dentro da janela de 24h).
-      await enviarTextoWhatsApp(tel, mensagem)
+      await enviarAvisoInterno(tel, mensagem)
     } catch (errLivre) {
       // Fora da janela de 24h o envio livre falha (ex.: 131047). Recai no template
       // aprovado, que entrega a qualquer hora. Se não houver template, propaga.

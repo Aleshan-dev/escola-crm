@@ -1,12 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { enviarTextoCloud, enviarTextoCloudConta, baixarMidiaCloud } from '@/lib/whatsapp-cloud'
 import { interpretarMidia, salvarMidiaStorage } from '@/lib/midia'
 import { registrarAlerta } from '@/lib/alertas'
-import { processarMensagemRecebida, type EnviarTexto } from '@/lib/atendimento'
+import { processarMensagemRecebida, registrarMensagemManual, type EnviarTexto } from '@/lib/atendimento'
+import { registrarJanela } from '@/lib/janela'
+import { assinaturaMetaValida, registrarWebhook, resultadoDaIngestao } from '@/lib/canais/webhook'
 
-// Folga para baixar mídia + transcrever/descrever antes de responder.
-export const maxDuration = 30
+// Ordem de progressão dos recibos: só avança, nunca volta ('falhou' é o topo).
+const RANK_STATUS: Record<string, number> = { enviado: 1, entregue: 2, lido: 3, falhou: 4 }
+
+// Folga para baixar mídia + transcrever/descrever + janela de debounce (15s).
+export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
@@ -20,24 +25,134 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const supabase = createServerAdminClient()
   try {
-    const body = await req.json()
-    const value = body?.entry?.[0]?.changes?.[0]?.value
+    // Autenticidade: X-Hub-Signature-256 = HMAC do corpo BRUTO com o app secret.
+    // Sem o segredo no env a checagem fica desligada (e a trilha registra isso).
+    const bruto = await req.text()
+    const segredo = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET || ''
+    if (segredo && !assinaturaMetaValida(bruto, req.headers.get('x-hub-signature-256'), segredo)) {
+      await registrarWebhook(supabase, { canal: 'cloud', resultado: 'rejeitado', detalhe: 'assinatura X-Hub-Signature-256 inválida' })
+      await registrarAlerta(supabase, 'webhook/whatsapp-cloud', 'Webhook Cloud com assinatura inválida rejeitado (confira WHATSAPP_APP_SECRET/META_APP_SECRET).')
+      return NextResponse.json({ error: 'assinatura invalida' }, { status: 401 })
+    }
+    const body = JSON.parse(bruto)
+    const change = body?.entry?.[0]?.changes?.[0]
+    const field: string = change?.field || ''
+    const value = change?.value
     const phoneNumberId: string = value?.metadata?.phone_number_id || ''
 
-    const { data: conta } = await supabase
-      .from('whatsapp_contas')
-      .select('phone_number_id, token')
-      .eq('phone_number_id', phoneNumberId)
-      .eq('ativo', true)
-      .maybeSingle()
+    // ── Recibos de entrega (sent → delivered → read → failed) ────────────────
+    const statuses = value?.statuses
+    if (Array.isArray(statuses) && statuses.length) {
+      const MAP: Record<string, string> = { sent: 'enviado', delivered: 'entregue', read: 'lido', failed: 'falhou' }
+      for (const st of statuses) {
+        if (!st?.id || !st?.status) continue
+        const novo = MAP[st.status]
+        if (!novo) continue
+        const upd: Record<string, unknown> = { status: novo }
+        if (st.status === 'failed') {
+          upd.erro_envio = st?.errors?.[0]?.title || st?.errors?.[0]?.message || 'falha na entrega'
+        }
+        // Nunca rebaixa: recibos chegam fora de ordem (um 'delivered' tardio não desfaz 'read').
+        const anteriores = Object.keys(RANK_STATUS).filter((s) => RANK_STATUS[s] < RANK_STATUS[novo])
+        let q = supabase.from('mensagens').update(upd).eq('whatsapp_message_id', st.id)
+        q = anteriores.length ? q.or(`status.is.null,status.in.(${anteriores.join(',')})`) : q.is('status', null)
+        await q
+      }
+      return NextResponse.json({ ok: true, statuses: statuses.length })
+    }
 
+    // ── CoEx: ECHO — a secretária respondeu pelo APP do celular ──────────────
+    // Espelha o comportamento do fromMe do Evolution: registra como out_humano e
+    // PAUSA a IA, para a Sara não falar por cima do atendimento humano. Echo é
+    // saída (não abre janela de 24h), então NÃO chama registrarJanela.
+    const echoes = value?.message_echoes
+    if (field === 'smb_message_echoes' || Array.isArray(echoes)) {
+      let n = 0
+      for (const echo of (echoes ?? [])) {
+        const to: string = echo?.to || echo?.recipient_id || ''
+        if (!to) continue
+        const tipo: string = echo?.type || 'texto'
+        const conteudo: string =
+          echo?.text?.body ||
+          echo?.[tipo]?.caption ||
+          (tipo === 'texto' ? '' : `[${tipo}]`)
+        try {
+          const status = await registrarMensagemManual(supabase, {
+            telefone: to, conteudo: conteudo || '[mensagem]', wid: echo?.id || '', canal: 'cloud', canalRef: phoneNumberId || null,
+          })
+          await registrarWebhook(supabase, {
+            canal: 'cloud', canalRef: phoneNumberId, evento: 'echo', externalId: echo?.id, payload: echo, ...resultadoDaIngestao(status),
+          })
+          n++
+        } catch (e) {
+          console.error('[whatsapp-cloud] echo falhou:', e instanceof Error ? e.message : e)
+        }
+      }
+      return NextResponse.json({ ok: true, echoes: n })
+    }
+
+    // ── CoEx: HISTORY (backfill até 6 meses) — reconhecido ───────────────────
+    // O backfill completo em crm.mensagens é uma etapa posterior (não bloqueia o
+    // atendimento ao vivo). Acusamos recebimento para a Meta não reenviar.
+    if (field === 'history' || Array.isArray(value?.history)) {
+      console.log('[whatsapp-cloud] history recebido (backfill adiado):', JSON.stringify(value ?? {}).slice(0, 400))
+      return NextResponse.json({ ok: true, history: 'ack' })
+    }
+
+    // ── CoEx: sync de contatos — reconhecido ─────────────────────────────────
+    if (field === 'smb_app_state_sync') {
+      return NextResponse.json({ ok: true, contatos: 'ack' })
+    }
+
+    // ── Mensagem RECEBIDA do responsável ─────────────────────────────────────
     const msg = value?.messages?.[0]
-    if (!msg) return NextResponse.json({ ignored: true })
+    if (!msg) return NextResponse.json({ ignored: true, field: field || 'sem_field' })
+    const trilha = { canal: 'cloud' as const, canalRef: phoneNumberId || null, evento: msg.type || 'message', externalId: msg.id, payload: body }
+
+    // Conta ativa deste número, COM RETRY. Sob rajada esta consulta às vezes
+    // falhava (erro transitório de conexão) ou voltava vazia mesmo com a conta
+    // ATIVA no banco; o código lia isso como "canal desativado" e DESCARTAVA a
+    // mensagem sem gravar — perda de inbound do lead da Jessica em 11/09 (2 de 4
+    // mensagens sumiram, incluindo "Hoje não conseguirei ir"). Repetimos algumas
+    // vezes antes de concluir que não há conta.
+    let conta: { phone_number_id: string; token: string | null } | null = null
+    let contaErro: string | null = null
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      const { data, error } = await supabase
+        .from('whatsapp_contas')
+        .select('phone_number_id, token')
+        .eq('phone_number_id', phoneNumberId)
+        .eq('ativo', true)
+        .maybeSingle()
+      if (data) {
+        conta = data
+        contaErro = null
+        break
+      }
+      contaErro = error?.message ?? null
+      if (tentativa < 3) await new Promise((r) => setTimeout(r, 150 * tentativa))
+    }
+
+    if (!conta) {
+      // Se houve ERRO na consulta, é falha de infraestrutura (não "canal
+      // desativado") e PODE ter perdido uma mensagem real — alerta com destaque
+      // para conferência humana no aparelho. Se veio vazio SEM erro, o número
+      // está de fato desativado (o WhatsApp opera via Evolution).
+      const motivo = contaErro
+        ? `⚠️ FALHA ao ler a conta do WhatsApp Cloud após 3 tentativas (${contaErro}). POSSÍVEL PERDA de mensagem de ${msg.from} (phone_number_id ${phoneNumberId}) — confira o aparelho e responda manualmente se preciso.`
+        : `Mensagem recebida no número Cloud DESATIVADO (phone_number_id ${phoneNumberId}, de ${msg.from}). O canal ativo é o Evolution — verifique se esse número da Meta ainda está divulgado em algum lugar.`
+      await registrarAlerta(supabase, 'webhook/whatsapp-cloud', motivo)
+      await registrarWebhook(supabase, { ...trilha, resultado: contaErro ? 'erro' : 'descartado', detalhe: motivo })
+      return NextResponse.json({ ignored: contaErro ? 'falha_consulta_conta' : 'canal cloud desativado' })
+    }
 
     const telefone: string = msg.from
     const pushName: string = value?.contacts?.[0]?.profile?.name || 'Família'
     const wid: string = msg.id || ''
     const token: string = conta?.token || process.env.WHATSAPP_CLOUD_TOKEN || ''
+
+    // Recebeu do responsável → renova a janela de 24h (permite texto livre).
+    await registrarJanela(supabase, telefone)
 
     // Texto ou mídia. A mídia é interpretada para a Sara (transcrição/visão) E o
     // arquivo original é salvo no storage, para abrir pelo chat.
@@ -87,6 +202,7 @@ export async function POST(req: NextRequest) {
       }
     } else {
       console.log('[whatsapp-cloud] tipo de mensagem ignorado:', msg.type)
+      await registrarWebhook(supabase, { ...trilha, resultado: 'descartado', detalhe: `tipo ${msg.type}` })
       return NextResponse.json({ ignored: `tipo ${msg.type}` })
     }
 
@@ -106,20 +222,37 @@ export async function POST(req: NextRequest) {
     // Atribuição: a API oficial traz o objeto "referral" em mensagens de anúncio CTWA
     const ref = msg.referral || null
 
-    await processarMensagemRecebida(supabase, {
-      telefone,
-      conteudo,
-      pushName,
-      wid,
-      origem: 'whatsapp-oficial',
-      tag: 'whatsapp-oficial',
-      enviarTexto: enviarCloud,
-      canal: ref ? 'meta-ads' : 'organico',
-      campanha: ref ? ref.headline || ref.source_id || null : null,
-      referral: ref || null,
-      phoneNumberId,
-      tipoMidia,
-      urlMidia,
+    // Responde o webhook na hora e processa em segundo plano (after): a janela de
+    // debounce de 15s roda sem segurar a resposta à Meta (evita reenvio/duplicação).
+    after(async () => {
+      try {
+        const status = await processarMensagemRecebida(supabase, {
+          telefone,
+          conteudo,
+          pushName,
+          wid,
+          origem: 'whatsapp-oficial',
+          tag: 'whatsapp-oficial',
+          enviarTexto: enviarCloud,
+          canalEnvio: 'cloud',
+          canalRef: phoneNumberId || null,
+          canal: ref ? 'meta-ads' : 'organico',
+          campanha: ref ? ref.headline || ref.source_id || null : null,
+          referral: ref || null,
+          phoneNumberId,
+          tipoMidia,
+          urlMidia,
+          // Mensagem citada (responder no WhatsApp) — respostas de Caso da equipe.
+          citadoWid: msg.context?.id || null,
+        })
+        // O canal do contato (familias.canal_whatsapp = 'cloud') é carimbado dentro de
+        // processarMensagemRecebida, pela família — não pelo telefone cru.
+        await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
+      } catch (e) {
+        console.error('whatsapp-cloud (after) erro:', e instanceof Error ? e.message : String(e))
+        await registrarAlerta(supabase, 'webhook/whatsapp-cloud', e instanceof Error ? e.message : String(e))
+        await registrarWebhook(supabase, { ...trilha, resultado: 'erro', detalhe: e instanceof Error ? e.message : String(e) })
+      }
     })
 
     return NextResponse.json({ ok: true })
