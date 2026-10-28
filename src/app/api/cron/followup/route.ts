@@ -264,6 +264,15 @@ export async function executarFollowup(agora: number = Date.now()) {
     .eq('estado', 'aguardando_equipe')
   const comCasoEsperando = new Set((casosEsperando ?? []).map((c: { lead_id: string }) => c.lead_id))
 
+  // Coluna "No Show": para onde o auto-detector move o lead quando a visita passa +1h
+  // sem ter sido marcada "realizada". Nome fixo do Kanban (ver triggerPorColuna).
+  const { data: colNoShow } = await supabase
+    .from('colunas')
+    .select('id')
+    .eq('nome', 'No Show')
+    .maybeSingle<{ id: string }>()
+  const noShowColunaId = colNoShow?.id ?? null
+
   const resultados: Resultado[] = []
   let enviados = 0
   let toques = 0
@@ -369,10 +378,17 @@ export async function executarFollowup(agora: number = Date.now()) {
           continue
         }
       } else {
-        // Sem visita futura: possível NO-SHOW (visita passou +2h e o lead segue em "Visita Agendada").
+        // Sem visita futura: possível NO-SHOW. A visita só vira no-show +2h DEPOIS do
+        // horário (o fuso é o do Google Agenda / Acre, corrigido já na gravação — ver
+        // atendimento.ts) e com o lead ainda em "Visita Agendada". A janela de 2h dá
+        // tempo de a família chegar/atrasar e de o gestor marcar a visita como realizada
+        // (ou movê-la para "Visita Realizada" — aí o lead nem cai neste trigger) ANTES
+        // de qualquer "você faltou". O que estourava antes não era a régua de +2h em si,
+        // e sim a hora-de-parede gravada 5h cedo, que fazia o resgate sair na HORA da
+        // visita (caso Aline, 27/10) — isso foi corrigido na gravação.
         const { data: passada } = await supabase
           .from('tarefas')
-          .select('data_hora')
+          .select('id, data_hora')
           .eq('lead_id', lead.id)
           .eq('tipo', 'visita')
           .eq('concluida', false)
@@ -389,12 +405,38 @@ export async function executarFollowup(agora: number = Date.now()) {
           resultados.push({ lead: lead.id, skip: 'no_show_esgotado' })
           continue
         }
-        // Primeira detecção: envia o resgate na hora e zera o contador; depois, backoff normal.
+        // Primeira detecção (+2h após o horário): marca a visita como ausente, MOVE o
+        // lead para a coluna "No Show", zera o contador e dispara o resgate na hora. Se
+        // a família tivesse comparecido, o gestor teria marcado "realizada" / movido
+        // para "Visita Realizada" — e não chegaríamos até aqui.
         if (!lead.no_show_em) {
           await supabase
-            .from('leads')
-            .update({ no_show_em: new Date().toISOString(), followup_count: 0 })
-            .eq('id', lead.id)
+            .from('tarefas')
+            .update({ concluida: true, status: 'ausente' })
+            .eq('id', passada.id)
+          const moveParaNoShow = !!noShowColunaId && lead.coluna_id !== noShowColunaId
+          const patch: Record<string, unknown> = { no_show_em: new Date().toISOString(), followup_count: 0 }
+          if (moveParaNoShow) {
+            patch.coluna_id = noShowColunaId
+            patch.entrou_coluna_em = new Date().toISOString()
+          }
+          await supabase.from('leads').update(patch).eq('id', lead.id)
+          if (moveParaNoShow) {
+            await supabase.from('acoes_sara').insert({
+              lead_id: lead.id,
+              tipo: 'movimentacao',
+              conteudo: 'No Show automático: visita passou +2h sem ser marcada como realizada.',
+              razao: 'no_show',
+              sucesso: true,
+              coluna_origem_id: lead.coluna_id,
+              coluna_destino_id: noShowColunaId,
+            })
+            await supabase.from('eventos_timeline').insert({
+              lead_id: lead.id,
+              tipo: 'movimentacao',
+              descricao: 'Movido para "No Show" (visita não confirmada como realizada 2h após o horário).',
+            })
+          }
           count = 0
         } else if (
           !estaDevido(

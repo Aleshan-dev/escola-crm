@@ -2,7 +2,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 import { completarDadosLead, salvarDadosLead } from '@/lib/dados-lead'
 import { notificarGestor } from '@/lib/notificacoes'
-import { labelAcre, dentroDaJanelaVisita } from '@/lib/disponibilidade'
+import { labelAcre, dentroDaJanelaVisita, ACRE_SHIFT_MS } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
 import { identificarResponsavel } from '@/lib/sgei'
 import { processarMensagemSalomao } from '@/lib/salomao'
@@ -814,7 +814,26 @@ export async function processarMensagemRecebida(
         const dh = new Date(saraResult.agendar_visita.data_hora)
         if (!isNaN(dh.getTime()) && dh.getTime() > Date.now()) {
           temSlotVisita = true
-          const dhIso = dh.toISOString()
+
+          // Correção de fuso (2026-10-27): a Sara às vezes carimba a HORA DE PAREDE
+          // como UTC — a visita entra 5h cedo (ex.: 08:00 Acre vira 08:00Z) e some da
+          // agenda; pior, o no-show passava a disparar na HORA da visita (caso Aline:
+          // resgate às 08:00 em ponto, com a família já no portão). Regra: respeitar
+          // SEMPRE o fuso do Google Agenda (America/Rio_Branco, UTC-5). Se o instante
+          // gravado cai FORA da grade de visitas mas +5h cai DENTRO dela, é
+          // inequivocamente esse bug — reescrevemos para o instante real (o mesmo que o
+          // Google guarda). Caso contrário, mantemos o que a Sara mandou.
+          const { data: gradeAtiva } = await supabase
+            .from('horarios_visita')
+            .select('dia_semana, hora_inicio, hora_fim')
+            .eq('ativo', true)
+          const grade = gradeAtiva && gradeAtiva.length > 0 ? gradeAtiva : null
+          let dhFinal = dh
+          if (grade && !dentroDaJanelaVisita(dh.toISOString(), grade)) {
+            const corrigido = new Date(dh.getTime() - ACRE_SHIFT_MS) // +5h: parede-em-UTC -> instante real
+            if (dentroDaJanelaVisita(corrigido.toISOString(), grade)) dhFinal = corrigido
+          }
+          const dhIso = dhFinal.toISOString()
 
           // REAGENDAMENTO (2026-09-16): antes o dedup era só por horário EXATO, então
           // toda mudança de horário criava uma tarefa NOVA e deixava a antiga órfã
@@ -831,7 +850,7 @@ export async function processarMensagemRecebida(
             .limit(1)
             .maybeSingle()
 
-          const mesmoHorario = visitaAberta && new Date(visitaAberta.data_hora).getTime() === dh.getTime()
+          const mesmoHorario = visitaAberta && new Date(visitaAberta.data_hora).getTime() === dhFinal.getTime()
 
           if (!mesmoHorario) {
             const reagendou = !!visitaAberta
@@ -869,21 +888,17 @@ export async function processarMensagemRecebida(
             await notificarGestor(
               supabase,
               'visita',
-              `📅 *Visita ${reagendou ? 'reagendada' : 'agendada'} pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nQuando: ${labelAcre(dh)}`
+              `📅 *Visita ${reagendou ? 'reagendada' : 'agendada'} pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nQuando: ${labelAcre(dhFinal)}`
             )
-            // Blindagem de fuso (2026-10-26): se o horário caiu FORA da grade de
-            // visitas, é o sintoma clássico do bug "hora de parede carimbada como
-            // UTC" — a visita entra 5h cedo e some da agenda. Avisamos o gestor para
-            // conferir; não reescrevemos, porque a família recebeu uma hora concreta.
-            const { data: gradeAtiva } = await supabase
-              .from('horarios_visita')
-              .select('dia_semana, hora_inicio, hora_fim')
-              .eq('ativo', true)
-            if (gradeAtiva && gradeAtiva.length > 0 && !dentroDaJanelaVisita(dhIso, gradeAtiva)) {
+            // Blindagem de fuso (2026-10-26): mesmo após a correção acima, se o horário
+            // AINDA cai FORA da grade de visitas (ex.: a família cravou um horário que a
+            // escola não atende), avisamos o gestor — aí não dá para inferir o instante
+            // certo sozinho.
+            if (grade && !dentroDaJanelaVisita(dhIso, grade)) {
               await notificarGestor(
                 supabase,
                 'visita',
-                `⚠️ *Confira esta visita* — caiu FORA da grade de visitas.\nFamília: ${familia.nome_responsavel || 'Família'}\nHorário gravado: ${labelAcre(dh)} (Acre)\nPode ser erro de fuso da IA. Ajuste o horário na agenda se preciso.`
+                `⚠️ *Confira esta visita* — caiu FORA da grade de visitas.\nFamília: ${familia.nome_responsavel || 'Família'}\nHorário gravado: ${labelAcre(dhFinal)} (Acre)\nPode ser erro de fuso da IA. Ajuste o horário na agenda se preciso.`
               )
             }
           }
