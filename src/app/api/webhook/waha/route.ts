@@ -10,6 +10,7 @@ import {
 import { extrairConteudoMidiaWaha } from '@/lib/midia'
 import { normalizarCelular } from '@/lib/telefone'
 import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere } from '@/lib/canais/webhook'
+import { lerConfigAnuncio, extrairReferralWaha, detectarOrigem } from '@/lib/atribuicao'
 
 // Webhook de ENTRADA do WAHA (canal de disparos). Espelha o /api/webhook/whatsapp
 // (Evolution), mas no formato de eventos do WAHA:
@@ -156,6 +157,19 @@ export async function POST(req: NextRequest) {
             '[O responsável enviou uma mídia que não consigo abrir por aqui. Agradeça com gentileza e, se parecer importante, peça para reenviar como texto. NÃO presuma o assunto — em especial, NÃO trate como comprovante de pagamento.]'
         }
 
+        // Atribuição de origem (anúncio pago × orgânico). Só no chip de ATENDIMENTO:
+        // o chip de outra sessão (cobrança) não recebe leads de anúncio. First-touch —
+        // processarMensagemRecebida só grava no INSERT da família. Frase-gatilho do
+        // anúncio no 1º recado é o sinal confiável no WAHA; o referral CTWA, quando o
+        // engine o entrega, é usado como bônus. Ver src/lib/atribuicao.ts.
+        let origemLead: { canal: 'meta-ads' | 'organico'; campanha: string | null; referral: unknown } = {
+          canal: 'organico', campanha: null, referral: null,
+        }
+        if (!outraSessao) {
+          const cfgAnuncio = await lerConfigAnuncio(supabase)
+          origemLead = detectarOrigem({ texto: texto || conteudo, referral: extrairReferralWaha(p), cfg: cfgAnuncio })
+        }
+
         const status = await processarMensagemRecebida(supabase, {
           telefone,
           conteudo,
@@ -167,7 +181,9 @@ export async function POST(req: NextRequest) {
           canalEnvio: 'waha',
           canalRef,
           somenteRegistrar: outraSessao ? { motivo: `o chip WAHA "${sessao}"` } : undefined,
-          canal: 'organico',
+          canal: origemLead.canal,
+          campanha: origemLead.campanha,
+          referral: origemLead.referral,
           tipoMidia,
           urlMidia,
           // Mensagem citada (responder no WhatsApp) — respostas de Caso da equipe.
