@@ -150,7 +150,7 @@ export async function registrarMensagemManual(
     .maybeSingle()
   if (!lead) return 'fromMe_sem_lead'
 
-  await supabase.from('mensagens').insert({
+  const { error: erroInsert } = await supabase.from('mensagens').insert({
     lead_id: lead.id,
     direcao: 'out_humano',
     agente: 'humano',
@@ -159,6 +159,17 @@ export async function registrarMensagemManual(
     whatsapp_message_id: wid || null,
     ...(canal ? { canal_whatsapp: canal, canal_ref: canalRef ?? null } : {}),
   })
+
+  // Dedupe autoritativo: se o wid já existe (índice único uq_mensagens_whatsapp_message_id),
+  // é o ECO da própria Sara — o fromMe do WAHA chega tão rápido que corre com a gravação do
+  // out_ia, e o SELECT acima pode rodar antes dela commitar. Nesse caso NÃO pausar a IA:
+  // tratar como envio nosso já registrado. Sem isto, todo lead recebe a 1ª resposta e a Sara
+  // se cala (a própria mensagem dela vira "atendente respondeu manualmente").
+  if (erroInsert) {
+    if ((erroInsert as { code?: string }).code === '23505') return 'fromMe_sara'
+    throw erroInsert
+  }
+
   // A conversa segue no canal por onde a equipe respondeu.
   if (canal && carimbarFamilia) await supabase.from('familias').update({ canal_whatsapp: canal }).eq('id', fam.id)
 
