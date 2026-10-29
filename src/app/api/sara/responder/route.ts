@@ -15,7 +15,10 @@ import { aplicarMemoriaDoTurno } from '@/lib/memoria/servico'
 // ROTEAMENTO (2026-09-04): família MATRICULADA com Salomão ativo é atendida pelo
 // SALOMÃO (não pela Sara) — igual ao webhook. A Sara não sabe tratar financeiro/
 // PIX de matriculado; usar a Sara aqui gerava respostas vagas ("vou verificar").
-export const maxDuration = 30
+// 30s não bastava: gerarRespostaSara (modelo) + envio dos balões com pausas estourava
+// o teto e a função morria com "Task timed out", mostrando "falha ao acionar a Sara"
+// mesmo tendo enviado o 1º balão. Alinhado com o webhook (que já usa 60s).
+export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
