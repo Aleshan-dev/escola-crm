@@ -867,26 +867,38 @@ export async function processarMensagemRecebida(
       // tarefa/evento na agenda com um horário CONCRETO e FUTURO — a família escolheu
       // uma das opções oferecidas. Interesse vago ou pedido de prazo NÃO agenda.
       let temSlotVisita = false
-      if (saraResult.agendar_visita?.data_hora) {
-        const dh = new Date(saraResult.agendar_visita.data_hora)
+      const av = saraResult.agendar_visita
+      // RAIZ DO FUSO (2026-10-29): o instante vem do SLOT ofertado (servidor), não da
+      // hora que o modelo monta. `slot_id` é resolvido em `slots_ofertados` para o UTC
+      // exato de `calcularSlotsDisponiveis`. Só quando não há slot casado é que caímos
+      // no `data_hora` cru + o clamp antigo (rede de segurança). Isso elimina o bug em
+      // que a Sara carimbava a parede como UTC e a visita entrava 2–5h cedo mesmo
+      // DENTRO da grade (casos Cris Ferreira e Régis Albuquerque).
+      const slotOfertado = av?.slot_id
+        ? saraResult.slots_ofertados.find((s) => s.id === av.slot_id)
+        : undefined
+      if (av && (slotOfertado || av.data_hora)) {
+        const dh = slotOfertado ? new Date(slotOfertado.data_hora) : new Date(av.data_hora as string)
         if (!isNaN(dh.getTime()) && dh.getTime() > Date.now()) {
           temSlotVisita = true
 
-          // Correção de fuso (2026-10-27): a Sara às vezes carimba a HORA DE PAREDE
-          // como UTC — a visita entra 5h cedo (ex.: 08:00 Acre vira 08:00Z) e some da
-          // agenda; pior, o no-show passava a disparar na HORA da visita (caso Aline:
-          // resgate às 08:00 em ponto, com a família já no portão). Regra: respeitar
-          // SEMPRE o fuso do Google Agenda (America/Rio_Branco, UTC-5). Se o instante
-          // gravado cai FORA da grade de visitas mas +5h cai DENTRO dela, é
-          // inequivocamente esse bug — reescrevemos para o instante real (o mesmo que o
-          // Google guarda). Caso contrário, mantemos o que a Sara mandou.
+          // Grade de visitas (usada no fallback de fuso e no aviso de "fora da grade").
           const { data: gradeAtiva } = await supabase
             .from('horarios_visita')
             .select('dia_semana, hora_inicio, hora_fim')
             .eq('ativo', true)
           const grade = gradeAtiva && gradeAtiva.length > 0 ? gradeAtiva : null
+
+          // Fallback sem slot casado (horário fora do ofertado). Correção de fuso
+          // (2026-10-27): a Sara às vezes carimba a HORA DE PAREDE como UTC — a visita
+          // entra 5h cedo (ex.: 08:00 Acre vira 08:00Z) e some da agenda; pior, o no-show
+          // passava a disparar na HORA da visita (caso Aline: resgate às 08:00 em ponto,
+          // com a família já no portão). Regra: respeitar SEMPRE o fuso do Google Agenda
+          // (America/Rio_Branco, UTC-5). Se o instante cai FORA da grade mas +5h cai
+          // DENTRO, é esse bug — reescrevemos para o instante real. Com slot casado o
+          // instante já é autoritativo, então pulamos o clamp.
           let dhFinal = dh
-          if (grade && !dentroDaJanelaVisita(dh.toISOString(), grade)) {
+          if (!slotOfertado && grade && !dentroDaJanelaVisita(dh.toISOString(), grade)) {
             const corrigido = new Date(dh.getTime() - ACRE_SHIFT_MS) // +5h: parede-em-UTC -> instante real
             if (dentroDaJanelaVisita(corrigido.toISOString(), grade)) dhFinal = corrigido
           }
