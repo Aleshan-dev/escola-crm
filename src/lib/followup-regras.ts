@@ -147,10 +147,20 @@ export function anguloPorTentativa(tentativa: number): string {
 }
 
 /**
- * Trava de FORMA compartilhada por todos os prompts de follow-up. Entra no fim do
- * system prompt (alta saliência) e repete as travas do Sara 6.1 contra cópia literal.
+ * Trava de FORMA + ABERTURA compartilhada por todos os prompts de follow-up. Entra no
+ * fim do system prompt (alta saliência) e repete as travas do Sara 6.1 contra cópia
+ * literal.
+ *
+ * AUDITORIA CMO 2026-10-29 — ABERTURA. Nenhum prompt instruía a PRIMEIRA linha, que num
+ * follow-up (lead que já sumiu) é o que decide se a família lê ou arquiva. Sem isso a
+ * Sara abria com "oi, tudo bem?" genérico. A abertura puxa o primeiro nome da CRIANÇA
+ * quando conhecido (a maior alavanca de relacionamento numa escola — "aqui seu filho é
+ * conhecido"); o nome já está no contexto da Sara (DADOS JÁ COLETADOS). Condicional
+ * ("quando você já o souber") para não colidir com o primeiro_contato, onde o nome ainda
+ * não existe.
  */
 export const FORMA =
+  ' ABERTURA: a primeira linha decide se a família lê ou arquiva a mensagem, então comece por algo específico desta conversa (o primeiro nome da criança quando você já o souber, um detalhe da visita ou do que a família falou por último), nunca por saudação genérica como "oi, tudo bem?".' +
   ' FORMA: no máximo 2 balões curtos. Nunca use travessão. Datas sempre absolutas, com dia da semana e data. Escreva com as palavras desta conversa, nunca copie frases prontas.'
 
 /**
@@ -194,11 +204,26 @@ export function promptPorTrigger(trigger: TriggerNome, nome: string, tentativa: 
     case 'resgate_no_show':
       return `${nome} não compareceu à visita agendada. Seja acolhedora e NUNCA cobre nem crie constrangimento: normalize o ocorrido lembrando que a rotina com criança pequena é corrida. Ofereça remarcar propondo DOIS horários concretos, com dia da semana, data e hora.${angulo}${forma}`
     case 'followup_pos_visita':
-      return `${nome} VISITOU a escola e não respondeu mais. É um lead QUENTE. Silêncio depois da visita quase sempre é uma objeção não dita: preço, alinhar com o cônjuge, ou comparação com outra escola. Reconheça a visita citando algo concreto das anotações e vá direto ao ponto: faça UMA pergunta que traga a objeção à tona, oferecendo as hipóteses mais prováveis para a família ter permissão de falar. Ofereça um próximo passo concreto, como segurar a vaga da criança na turma. Se o assunto for preço, ANCORE com o valor de partida real da sua base de conhecimento e NUNCA fuja do número. Termine com UMA pergunta fechada.${angulo}${forma}`
+      // AUDITORIA CMO 2026-10-29 — este toque empilhava reconhecer a visita + abrir a
+      // objeção + propor vaga + ancorar preço + pergunta fechada, tudo em 2 balões: vira
+      // mensagem "vendedora", o oposto de relacionamento. Enxugado para UM movimento
+      // (reconhecer + UMA pergunta que abra a objeção). Vaga e preço só quando a objeção
+      // aparecer (a conversa reativa assume) ou no D10, que já faz o próximo passo. Só
+      // dirige o D0 (promptPosVisitaPorToque case 0); os demais toques têm prompt próprio.
+      return `${nome} VISITOU a escola e não respondeu mais. É um lead QUENTE, e o silêncio depois da visita quase sempre esconde uma objeção não dita (preço, alinhar com o cônjuge, comparação com outra escola). Faça UMA coisa só nesta mensagem: reconheça a visita citando um detalhe concreto das anotações e faça UMA pergunta que dê à família permissão de dizer o que travou, oferecendo as hipóteses mais prováveis. NÃO empilhe proposta de vaga nem valores agora: se a objeção for preço, isso se trata quando ela aparecer. Feche nessa única pergunta.${angulo}${forma}`
     case 'recuperacao':
-      return `Recupere ${nome}, que está há dias sem avançar. Seja calorosa e ATIVA. Reforce um diferencial concreto, como a turma de no máximo 10 crianças e o acompanhamento próximo da rotina. Em vez de perguntar se ficou alguma dúvida, PROPONHA um próximo passo concreto: dois horários de visita com dia e data, ou segurar a vaga da criança. Faça UMA pergunta fechada, nunca dois pedidos na mesma mensagem.${angulo}${forma}`
+      // AUDITORIA CMO 2026-10-29 — o corpo mandava SEMPRE "proponha dois horários", mas a
+      // partir do 2º toque o angulo somado pede o oposto (reduza o custo, não peça visita).
+      // No reforço o corpo cede ao ângulo; a proposta de visita fica só no 1º toque.
+      return tentativa >= 2
+        ? `Recupere ${nome}, que está há dias sem avançar e já recebeu um toque seu sem resposta. NÃO repita a proposta de visita do toque anterior: conduza conforme o ângulo indicado abaixo, que muda a abordagem para não soar cobrança. Reforce no máximo UM diferencial concreto e verdadeiro (a turma de no máximo 10 crianças, o acompanhamento próximo da rotina). Faça UMA pergunta só.${angulo}${forma}`
+        : `Recupere ${nome}, que está há dias sem avançar. Seja calorosa e ATIVA. Reforce um diferencial concreto, como a turma de no máximo 10 crianças e o acompanhamento próximo da rotina, e PROPONHA um próximo passo concreto: dois horários de visita com dia e data, ou segurar a vaga da criança. Faça UMA pergunta fechada, nunca dois pedidos na mesma mensagem.${forma}`
     case 'reengajamento':
-      return `Retome com ${nome}, que demonstrou interesse mas parou de responder ANTES de agendar a visita. Seja calorosa e ATIVA. Em vez de se colocar à disposição, PROPONHA conhecer a escola oferecendo DOIS horários concretos, cada um com dia da semana, data e hora. Só ofereça horários se você já souber o nome e a idade da criança; se ainda não souber, use esta mensagem para perguntar isso. Se for verdade que a turma da idade dela tem poucas vagas, dê esse motivo para ser agora, mas NUNCA invente escassez. Faça UMA pergunta fechada e fácil de responder.${angulo}${forma}`
+      // AUDITORIA CMO 2026-10-29 — mesmo conflito da recuperacao: o corpo propunha visita
+      // em todo toque, colidindo com o ângulo do reforço. No reforço, segue o ângulo.
+      return tentativa >= 2
+        ? `Retome com ${nome}, que demonstrou interesse, parou de responder ANTES de agendar a visita e já recebeu um toque seu sem resposta. NÃO repita a proposta do toque anterior: conduza conforme o ângulo indicado abaixo. Só fale em horários de visita se você já souber o nome e a idade da criança E o próprio ângulo pedir um próximo passo; caso contrário, apenas siga o ângulo. NUNCA invente escassez de vagas. Faça UMA pergunta só.${angulo}${forma}`
+        : `Retome com ${nome}, que demonstrou interesse mas parou de responder ANTES de agendar a visita. Seja calorosa e ATIVA. Em vez de se colocar à disposição, PROPONHA conhecer a escola oferecendo DOIS horários concretos, cada um com dia da semana, data e hora. Só ofereça horários se você já souber o nome e a idade da criança; se ainda não souber, use esta mensagem para perguntar isso. Se for verdade que a turma da idade dela tem poucas vagas, dê esse motivo para ser agora, mas NUNCA invente escassez. Faça UMA pergunta fechada e fácil de responder.${forma}`
   }
 }
 
