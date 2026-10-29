@@ -81,11 +81,15 @@ async function marcarPerdidosPorSilencio(
   supabase: ReturnType<typeof createServerAdminClient>,
   agora: number
 ): Promise<number> {
-  const { data: colunas } = await supabase.from('colunas').select('id, nome')
+  const { data: colunas } = await supabase.from('colunas').select('id, nome, funil_id')
   if (!colunas) return 0
-  const cols = colunas as { id: string; nome: string }[]
-  const perdidos = cols.find((c) => /perdid/i.test(c.nome))
-  if (!perdidos) return 0
+  const cols = colunas as { id: string; nome: string; funil_id: string }[]
+  // O nome "Perdidos" se repete entre funis (Captação, Campanha 2027...). Move o lead
+  // para o "Perdidos" DO PRÓPRIO funil — nunca para o de outro funil.
+  const perdidosPorFunil = new Map<string, string>()
+  for (const c of cols) if (/perdid/i.test(c.nome)) perdidosPorFunil.set(c.funil_id, c.id)
+  if (perdidosPorFunil.size === 0) return 0
+  const funilDaColuna = new Map<string, string>(cols.map((c) => [c.id, c.funil_id]))
   const terminaisIds = new Set(cols.filter((c) => /matric|perdid/i.test(c.nome)).map((c) => c.id))
 
   const { data: candidatos } = await supabase
@@ -99,10 +103,13 @@ async function marcarPerdidosPorSilencio(
     if (terminaisIds.has(l.coluna_id)) continue
     if (!deveMarcarPerdidoPorSilencio(ms(l.ultimo_followup_em), agora)) continue
 
+    const perdidosId = perdidosPorFunil.get(funilDaColuna.get(l.coluna_id) ?? '')
+    if (!perdidosId) continue // funil do lead sem coluna "Perdidos": não move
+
     await supabase
       .from('leads')
       .update({
-        coluna_id: perdidos.id,
+        coluna_id: perdidosId,
         entrou_coluna_em: new Date().toISOString(),
         motivo_perda: 'Sem resposta após follow-ups',
       })
@@ -115,7 +122,7 @@ async function marcarPerdidosPorSilencio(
       razao: 'sem_resposta',
       sucesso: true,
       coluna_origem_id: l.coluna_id,
-      coluna_destino_id: perdidos.id,
+      coluna_destino_id: perdidosId,
     })
 
     await supabase.from('eventos_timeline').insert({
