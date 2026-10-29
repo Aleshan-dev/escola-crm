@@ -143,12 +143,34 @@ export async function registrarMensagemManual(
 
   const { data: lead } = await supabase
     .from('leads')
-    .select('id, ia_ativa')
+    .select('id, ia_ativa, resposta_lock_em')
     .eq('familia_id', fam.id)
     .order('criado_em', { ascending: false })
     .limit(1)
     .maybeSingle()
   if (!lead) return 'fromMe_sem_lead'
+
+  // Corrida do 1º balão: quando a Sara responde em vários balões, o eco fromMe de um
+  // balão pode chegar ANTES de o app gravar o out_ia dele — aí o dedupe por wid (acima)
+  // e o 23505 (abaixo) não pegam, o out_humano é inserido e a Sara se pausa sozinha
+  // ("atendente respondeu manualmente"). Enquanto a Sara está gerando/enviando a resposta
+  // deste lead, a trava `resposta_lock_em` está FRESCA (tomada em processarMensagemRecebida
+  // e só liberada no finally, cobrindo todo o laço de balões). Lock fresco ⇒ este fromMe é
+  // eco nosso: grava como out_ia (timeline limpa) e NÃO pausa.
+  const lockFresco = lead.resposta_lock_em != null
+    && Date.now() - new Date(lead.resposta_lock_em as string).getTime() < LOCK_TTL_MS
+  if (lockFresco) {
+    await supabase.from('mensagens').insert({
+      lead_id: lead.id,
+      direcao: 'out_ia',
+      agente: 'sara',
+      agente_origem: 'conversa',
+      conteudo,
+      whatsapp_message_id: wid || null,
+      ...(canal ? { canal_whatsapp: canal, canal_ref: canalRef ?? null } : {}),
+    }) // 23505 aqui = o app já gravou o out_ia deste balão; mesma linha, pode ignorar
+    return 'fromMe_sara'
+  }
 
   const { error: erroInsert } = await supabase.from('mensagens').insert({
     lead_id: lead.id,

@@ -8,13 +8,18 @@ import { registrarMensagemManual } from './atendimento'
 // AUTORITATIVO: o insert do out_humano bate 23505. Antes do fix, o erro era
 // ignorado e a IA era pausada ("atendente respondeu manualmente"). Agora o 23505
 // significa "é eco da própria Sara" → não pausa.
+//
+// Complemento (29/10/2026): no 1º balão de uma resposta multi-balão o eco pode
+// GANHAR a corrida e gravar o out_humano antes do app gravar o out_ia — aí não há
+// 23505. A trava de resposta (leads.resposta_lock_em) está fresca durante todo o
+// envio; lock fresco ⇒ o fromMe é eco nosso → grava out_ia e não pausa.
 
 type Resolvido = { data?: unknown; error?: unknown }
 
 function fakeSupabase(cfg: {
   dedupe: Resolvido // mensagens.select -> acha ou não o wid
   insertMensagem: Resolvido // mensagens.insert -> ok ou erro (23505)
-  lead: { id: string; ia_ativa: boolean }
+  lead: { id: string; ia_ativa: boolean; resposta_lock_em?: string | null }
 }) {
   const calls = { pauseUpdate: 0, eventoPausa: 0, insertOutHumano: 0 }
 
@@ -93,6 +98,43 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
     expect(r).toBe('registrado_out_humano')
     expect(calls.pauseUpdate).toBe(1) // desligou a Sara (atendente assumiu)
     expect(calls.eventoPausa).toBe(1)
+  })
+
+  it('eco do 1º balão (sem 23505) com trava de resposta fresca NÃO pausa', async () => {
+    const { supabase, calls } = fakeSupabase({
+      dedupe: { data: null }, // out_ia deste balão ainda não existe
+      insertMensagem: { error: null }, // o eco GANHOU a corrida: insert do out_ia foi aceito
+      lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: new Date().toISOString() },
+    })
+
+    const r = await registrarMensagemManual(supabase, {
+      telefone: '5568999573601',
+      conteudo: 'Olá, Cris! Que bom ter você por aqui.',
+      wid: 'true_131533474132178@lid_3EB0',
+    })
+
+    expect(r).toBe('fromMe_sara')
+    expect(calls.insertOutHumano).toBe(1) // gravou (como out_ia), mas…
+    expect(calls.pauseUpdate).toBe(0) // …não desligou a Sara
+    expect(calls.eventoPausa).toBe(0)
+  })
+
+  it('trava de resposta OBSOLETA (>TTL) não blinda: cai no fluxo de resposta humana', async () => {
+    const velho = new Date(Date.now() - 120_000).toISOString() // 2 min > LOCK_TTL_MS (60s)
+    const { supabase, calls } = fakeSupabase({
+      dedupe: { data: null },
+      insertMensagem: { error: null }, // wid novo, humano de verdade
+      lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: velho },
+    })
+
+    const r = await registrarMensagemManual(supabase, {
+      telefone: '5568999573601',
+      conteudo: 'Oi, aqui é a secretaria',
+      wid: 'true_wid_humano_apos_lock',
+    })
+
+    expect(r).toBe('registrado_out_humano')
+    expect(calls.pauseUpdate).toBe(1)
   })
 
   it('wid já conhecido no dedupe retorna cedo, sem inserir nem pausar', async () => {
