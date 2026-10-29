@@ -37,6 +37,7 @@ export default function InicioPage() {
   const [periodo, setPeriodo] = useState('mes')
   const [fstats, setFstats] = useState<any>(null)
   const [invs, setInvs] = useState<any[]>([])
+  const [semanas, setSemanas] = useState<any[]>([])
 
   useEffect(() => {
     (async () => {
@@ -64,6 +65,12 @@ export default function InicioPage() {
       setFstats(fs2 || null)
       const { data: iv } = await supabase.from('investimento_canal').select('canal, periodo, valor')
       setInvs((iv as any[]) || [])
+      const { data: sem } = await supabase
+        .from('funil_metricas_semana')
+        .select('*')
+        .order('semana_inicio', { ascending: false })
+        .limit(8)
+      setSemanas((sem as any[]) || [])
       setLoading(false)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,6 +222,46 @@ export default function InicioPage() {
                     <FollowStat label="Taxa de resposta" v={fstats.leads_alcancados > 0 ? `${Math.round((fstats.leads_responderam / fstats.leads_alcancados) * 100)}%` : '—'} />
                   </div>
                   {fstats.falhas > 0 && <div className="mt-2 text-center text-xs text-amber-700">{fstats.falhas} envio(s) falharam</div>}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="mb-1 font-bold text-slate-900">Funil por semana</h2>
+              <p className="mb-4 text-xs text-slate-500">Throughput semanal para a reunião de captação: contato → visita agendada → realizada → matrícula.</p>
+              {semanas.length === 0 ? (
+                <p className="text-sm text-slate-400">Sem dados ainda.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase text-slate-400">
+                        <th className="py-2 pr-3">Semana</th>
+                        <th className="py-2 px-3 text-right">Contatos</th>
+                        <th className="py-2 px-3 text-right">Agendadas</th>
+                        <th className="py-2 px-3 text-right">Realizadas</th>
+                        <th className="py-2 px-3 text-right">No-show</th>
+                        <th className="py-2 px-3 text-right">Matrículas</th>
+                        <th className="py-2 pl-3 text-right">Contato→visita</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {semanas.map((s) => {
+                        const tx = s.contatos_novos > 0 ? Math.round((s.visitas_agendadas / s.contatos_novos) * 100) : null
+                        return (
+                          <tr key={s.semana}>
+                            <td className="py-2 pr-3 font-medium text-slate-700">{s.semana}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.contatos_novos}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.visitas_agendadas}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.visitas_realizadas}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.no_shows}</td>
+                            <td className="py-2 px-3 text-right font-semibold text-slate-900">{s.matriculas}</td>
+                            <td className="py-2 pl-3 text-right text-slate-600">{tx === null ? '—' : `${tx}%`}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
