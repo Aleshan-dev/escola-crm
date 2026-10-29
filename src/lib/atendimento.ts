@@ -58,6 +58,10 @@ export { dividirEmBaloes }
 // latência da chamada ao modelo. A trava é considerada OBSOLETA após LOCK_TTL_MS,
 // para uma execução que morreu no meio (timeout/erro) não travar o lead p/ sempre.
 const LOCK_TTL_MS = 60_000
+// Janela em que um fromMe logo após um out_ia nosso é tratado como ECO de balão (não
+// handoff humano) — vale para qualquer caminho de envio, inclusive os que não seguram a
+// trava de resposta. Curta de propósito, para não mascarar um atendente que assume.
+const ECO_OUT_IA_JANELA_MS = 20_000
 
 /** Tenta virar a execução que responde este lead. UPDATE condicional atômico:
  *  o Postgres serializa a trava de linha, então de N execuções concorrentes só a
@@ -159,7 +163,27 @@ export async function registrarMensagemManual(
   // eco nosso: grava como out_ia (timeline limpa) e NÃO pausa.
   const lockFresco = lead.resposta_lock_em != null
     && Date.now() - new Date(lead.resposta_lock_em as string).getTime() < LOCK_TTL_MS
-  if (lockFresco) {
+
+  // Sinal INDEPENDENTE do caminho de envio: se há um out_ia nosso para este lead nos
+  // últimos segundos, uma resposta multi-balão está saindo e este fromMe é o eco de um
+  // balão — vale também para caminhos que NÃO seguram a trava (botão "responder agora",
+  // follow-up, Caso), onde só o lock não bastaria (foi assim que a Sara voltou a pausar
+  // no 2º balão de uma resposta manual).
+  let outIaRecente = false
+  if (!lockFresco) {
+    const limite = new Date(Date.now() - ECO_OUT_IA_JANELA_MS).toISOString()
+    const { data: ultimaOutIa } = await supabase
+      .from('mensagens')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('direcao', 'out_ia')
+      .gt('criado_em', limite)
+      .limit(1)
+      .maybeSingle()
+    outIaRecente = ultimaOutIa != null
+  }
+
+  if (lockFresco || outIaRecente) {
     await supabase.from('mensagens').insert({
       lead_id: lead.id,
       direcao: 'out_ia',

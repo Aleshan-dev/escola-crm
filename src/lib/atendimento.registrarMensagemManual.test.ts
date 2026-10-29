@@ -17,7 +17,8 @@ import { registrarMensagemManual } from './atendimento'
 type Resolvido = { data?: unknown; error?: unknown }
 
 function fakeSupabase(cfg: {
-  dedupe: Resolvido // mensagens.select -> acha ou não o wid
+  dedupe: Resolvido // mensagens.select do wid -> acha ou não
+  outIaRecente?: Resolvido // mensagens.select com .gt -> out_ia nos últimos segundos
   insertMensagem: Resolvido // mensagens.insert -> ok ou erro (23505)
   lead: { id: string; ia_ativa: boolean; resposta_lock_em?: string | null }
 }) {
@@ -25,10 +26,12 @@ function fakeSupabase(cfg: {
 
   function builder(table: string) {
     let op: 'select' | 'insert' | 'update' | null = null
+    let usouGt = false // só a busca de out_ia recente usa .gt
     const b: Record<string, unknown> = {}
     const chain = () => b
     b.select = () => { op = 'select'; return b }
     b.eq = () => b
+    b.gt = () => { usouGt = true; return b }
     b.order = () => b
     b.limit = () => b
     b.insert = (row?: unknown) => {
@@ -47,7 +50,7 @@ function fakeSupabase(cfg: {
     // thenable: resolve conforme tabela + operação
     b.then = (resolve: (v: Resolvido) => void) => {
       let v: Resolvido = {}
-      if (table === 'mensagens' && op === 'select') v = cfg.dedupe
+      if (table === 'mensagens' && op === 'select') v = usouGt ? (cfg.outIaRecente ?? { data: null }) : cfg.dedupe
       else if (table === 'mensagens' && op === 'insert') v = cfg.insertMensagem
       else if (table === 'familias' && op === 'select') v = { data: { id: 'fam1' } }
       else if (table === 'leads' && op === 'select') v = { data: cfg.lead }
@@ -119,7 +122,26 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
     expect(calls.eventoPausa).toBe(0)
   })
 
-  it('trava de resposta OBSOLETA (>TTL) não blinda: cai no fluxo de resposta humana', async () => {
+  it('2º balão por caminho SEM trava (ex.: "responder agora"): out_ia recente evita a pausa', async () => {
+    const { supabase, calls } = fakeSupabase({
+      dedupe: { data: null }, // eco deste balão ainda não gravado como out_ia
+      outIaRecente: { data: { id: 'out-ia-do-balao-1' } }, // balão 1 saiu há segundos
+      insertMensagem: { error: null }, // o eco ganhou a corrida do insert
+      lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: null }, // endpoint não segurou a trava
+    })
+
+    const r = await registrarMensagemManual(supabase, {
+      telefone: '5568999573601',
+      conteudo: 'Para sabermos se o valor é referente a este ano ou 2027, qual seria…',
+      wid: 'true_131533474132178@lid_3EB043DD',
+    })
+
+    expect(r).toBe('fromMe_sara')
+    expect(calls.pauseUpdate).toBe(0) // não desligou a Sara
+    expect(calls.eventoPausa).toBe(0)
+  })
+
+  it('trava de resposta OBSOLETA (>TTL) e sem out_ia recente: cai no fluxo de resposta humana', async () => {
     const velho = new Date(Date.now() - 120_000).toISOString() // 2 min > LOCK_TTL_MS (60s)
     const { supabase, calls } = fakeSupabase({
       dedupe: { data: null },

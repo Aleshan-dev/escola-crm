@@ -45,6 +45,15 @@ export async function POST(req: NextRequest) {
   )
   enviarTexto.carimbo = conversa.carimbo
 
+  // Blindagem contra o eco fromMe (ver registrarMensagemManual): enquanto ESTE endpoint
+  // envia os balões, marca a trava resposta_lock_em para o webhook do eco não confundir a
+  // própria fala da Sara/Salomão com "atendente respondeu manualmente" e pausar a IA. O
+  // webhook principal já segura essa trava; a resposta manual não segurava — por isso o
+  // eco de um balão ainda pausava a Sara quando a resposta vinha pelo botão "responder agora".
+  const adminLock = createServerAdminClient()
+  await adminLock.from('leads').update({ resposta_lock_em: new Date().toISOString() }).eq('id', lead_id)
+  try {
+
   // ── Família matriculada + Salomão ativo → quem responde é o SALOMÃO ──────────
   const { data: cfg } = await supabase.from('config_ia').select('salomao_ativo').eq('id', 1).maybeSingle()
   if (fam.ja_responsavel === true && cfg?.salomao_ativo === true) {
@@ -135,5 +144,10 @@ export async function POST(req: NextRequest) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Erro desconhecido'
     return NextResponse.json({ error: msg }, { status: 500 })
+  }
+
+  } finally {
+    // Libera a trava de resposta, inclusive em qualquer return acima (janela fechada etc.).
+    await adminLock.from('leads').update({ resposta_lock_em: null }).eq('id', lead_id)
   }
 }
