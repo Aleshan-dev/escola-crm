@@ -49,7 +49,7 @@ export default function InicioPage() {
         supabase.from('colunas').select('id, nome, ordem, funil_id').order('ordem'),
         supabase.from('leads').select('*, crianca:criancas(serie_desejada), familia:familias(canal)').eq('arquivado', false),
         supabase.from('tarefas').select('id, criado_em, lead_id, responsavel_id'),
-        supabase.from('metas_crescimento').select('nome, valor_meta'),
+        supabase.from('metas_crescimento').select('nome, valor_meta, periodo'),
         supabase.from('usuarios').select('id, nome'),
       ])
       const fs = (fr.data as any[]) || []
@@ -86,7 +86,10 @@ export default function InicioPage() {
     const ts = tarefas.filter((t) => t.lead_id && leadIds.has(t.lead_id))
     const colMatricCaptacao = cols.find((c) => /matric/i.test(c.nome))
     const iniMes = (() => { const x = new Date(); x.setDate(1); x.setHours(0, 0, 0, 0); return x.getTime() })()
-    const somaMeta = (re: RegExp) => metas.filter((x) => re.test(x.nome || '')).reduce((s, x) => s + (x.valor_meta || 0), 0)
+    // Soma só a meta do ano-campanha mais recente (ex.: 2027). Sem isso, metas de anos
+    // anteriores que continuam como histórico (ex.: "Matrículas 2026") inflariam o alvo do KPI.
+    const anoAtivo = metas.length ? Math.max(...metas.map((x) => parseInt(x.periodo, 10) || 0)) : 0
+    const somaMeta = (re: RegExp) => metas.filter((x) => re.test(x.nome || '') && (parseInt(x.periodo, 10) || 0) === anoAtivo).reduce((s, x) => s + (x.valor_meta || 0), 0)
 
     // Quando um lead é matriculado, ele é transferido para o funil dedicado "Matriculados"
     // (colunas por série/turma), saindo do funil de captação. Portanto contamos as matrículas
