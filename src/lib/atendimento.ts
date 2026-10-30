@@ -399,6 +399,26 @@ export async function processarMensagemRecebida(
       .select('id, ia_ativa, coluna_id, sara_pode_mover, crianca_id, precisa_atendimento_humano, no_show_em, reagendamentos_count')
       .single()
     lead = ins.data
+
+    // Mesma corrida do primeiro contato que já tratamos na família: duas mensagens
+    // de um número NOVO chegam quase juntas, nenhuma das duas acha lead e as duas
+    // tentam inserir. A segunda bate no índice único uniq_lead_ativo_por_familia
+    // (um lead ativo por família, 23505) e a mensagem era PERDIDA com "Falha ao
+    // criar lead" (ex.: 27/10, 29/10 e 30/10/2026). Reconsulta e grava a mensagem
+    // no lead que o vencedor já criou, em vez de falhar.
+    if (!lead) {
+      const rel = await supabase
+        .from('leads')
+        .select('id, ia_ativa, coluna_id, sara_pode_mover, crianca_id, precisa_atendimento_humano, no_show_em, reagendamentos_count')
+        .eq('familia_id', familia.id)
+        .order('criado_em', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      lead = rel.data
+    }
+    if (!lead && ins.error) {
+      throw new Error(`Falha ao criar lead: ${ins.error.message}`)
+    }
   }
   if (!lead) throw new Error('Falha ao criar lead')
 
@@ -812,7 +832,7 @@ export async function processarMensagemRecebida(
         })
         await supabase.from('eventos_timeline').insert({
           lead_id: lead.id,
-          tipo: 'movimentacao',
+          tipo: 'movido_coluna',
           descricao: saraResult.motivo_arquivamento || 'Arquivado (candidato a vaga de emprego).',
         })
         return lead.id
@@ -1032,7 +1052,7 @@ export async function processarMensagemRecebida(
           })
 
           await supabase.from('eventos_timeline').insert({
-            lead_id: lead.id, tipo: 'movimentacao',
+            lead_id: lead.id, tipo: 'movido_coluna',
             descricao: `Sara moveu de "${colunaAtual.nome}" para "${proximaColuna.nome}". Motivo: ${saraResult.razao_movimentacao || 'não informado'}`,
           })
 

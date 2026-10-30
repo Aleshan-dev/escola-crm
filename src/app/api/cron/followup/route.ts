@@ -127,7 +127,7 @@ async function marcarPerdidosPorSilencio(
 
     await supabase.from('eventos_timeline').insert({
       lead_id: l.id,
-      tipo: 'movimentacao',
+      tipo: 'movido_coluna',
       descricao: `Movido para "Perdidos" automaticamente — sem resposta por ${DIAS_SILENCIO_PERDIDO} dias após os follow-ups.`,
     })
 
@@ -440,7 +440,7 @@ export async function executarFollowup(agora: number = Date.now()) {
             })
             await supabase.from('eventos_timeline').insert({
               lead_id: lead.id,
-              tipo: 'movimentacao',
+              tipo: 'movido_coluna',
               descricao: 'Movido para "No Show" (visita não confirmada como realizada 2h após o horário).',
             })
           }
