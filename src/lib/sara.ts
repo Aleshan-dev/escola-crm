@@ -112,6 +112,38 @@ export function limparTexto(texto?: string | null): string {
     .trim()
 }
 
+/**
+ * Resgata SÓ o texto de "resposta" de um JSON malformado ou truncado, sem nunca
+ * devolver as chaves/escapes crus. Rede de segurança para o catch do parse: em
+ * 30/10/2026 um JSON cortado pelo maxTokens caiu no fallback `limparTexto(raw)` e a
+ * família recebeu `{ "resposta": "..."` literal, com o valor partido ("R$ 1." + "297,00").
+ * Lê do primeiro `"resposta": "` até a aspa de fechamento (ou o fim, se truncado),
+ * decodificando os escapes JSON. Devolve null se não achar o campo.
+ */
+export function extrairRespostaParcial(raw: string): string | null {
+  const abre = raw.match(/"resposta"\s*:\s*"/)
+  if (!abre) return null
+  let out = ''
+  for (let i = abre.index! + abre[0].length; i < raw.length; i++) {
+    const c = raw[i]
+    if (c === '\\') {
+      const n = raw[i + 1]
+      if (n === undefined) break // escape truncado no fim
+      if (n === 'u') {
+        out += String.fromCharCode(parseInt(raw.slice(i + 2, i + 6), 16) || 0)
+        i += 5
+      } else {
+        out += n === 'n' ? '\n' : n === 't' ? '\t' : n === 'r' ? '' : n // \" \\ \/ -> o próprio char
+        i += 1
+      }
+      continue
+    }
+    if (c === '"') break // fim da string de resposta
+    out += c
+  }
+  return out.trim() || null
+}
+
 /** Valores que o modelo usa como "ainda não sei" e que NÃO podem virar dado. */
 const VALORES_LIXO = new Set([
   'a confirmar', 'a definir', 'não informado', 'nao informado', 'não sei',
@@ -646,8 +678,13 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       memoria_salvar: memoriaAtiva ? parseMemoriaSalvar(parsed.memoria_salvar, memoria.mapa) : [],
     }
   } catch {
+    // JSON malformado/truncado: NUNCA despejar as chaves cruas para a família.
+    // Resgata só o campo "resposta"; se o bruto nem começa como JSON (texto puro do
+    // modelo), mantém o comportamento antigo de usar o bruto; senão, mensagem genérica.
+    const salvo = extrairRespostaParcial(raw)
+    const bruto = salvo ?? (raw.trimStart().startsWith('{') ? '' : raw)
     return {
-      resposta: limparTexto(raw) || 'Desculpe, não consegui responder agora.',
+      resposta: limparTexto(bruto) || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: null,
       razao_movimentacao: null,
       familia_dados: null,
