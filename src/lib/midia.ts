@@ -89,6 +89,82 @@ export async function salvarMidiaStorage(
   }
 }
 
+// ── Gemini nativo: lê áudio, imagem e PDF numa só credencial ────────────────
+// A credencial (hoje Gemini) vem do banco, como o resto da IA — não do
+// OPENAI_API_KEY fixo. Modelos '-lite' nem sempre aceitam áudio/PDF, então
+// mídia usa um flash completo por padrão (MIDIA_MODELO_GEMINI sobrescreve).
+const MODELO_MIDIA_PADRAO = 'gemini-flash-latest'
+const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
+
+function limparMime(mimetype: string): string {
+  return (mimetype || '').split(';')[0].trim().toLowerCase()
+}
+
+// Só mandamos ao Gemini o que ele lê como inline_data com segurança.
+function geminiLe(mime: string): boolean {
+  return mime.startsWith('image/') || mime.startsWith('audio/') || mime === 'application/pdf'
+}
+
+function instrucaoMidia(tipo: 'audio' | 'imagem' | 'documento'): string {
+  if (tipo === 'audio') {
+    return 'Transcreva integralmente este áudio em português do Brasil. Responda SOMENTE com a transcrição, sem comentários, sem aspas e sem rótulos.'
+  }
+  if (tipo === 'imagem') {
+    return 'Você analisa imagens enviadas por responsáveis no WhatsApp de uma escola de educação infantil. Em 1-2 frases, em português, diga objetivamente o que a imagem mostra (ex.: documento como RG, CPF, comprovante de residência ou de pagamento; print de conversa; foto da criança). Se houver texto legível relevante (valor, data, banco), inclua-o. Nunca invente informações.'
+  }
+  return 'Você analisa um documento enviado por um responsável no WhatsApp de uma escola de educação infantil. Em português, resuma objetivamente o conteúdo e extraia os dados relevantes: se for comprovante de pagamento, cite valor, data e banco/forma; se for contrato, diga se está assinado e os pontos principais; se for lista/material, liste os itens. Seja conciso (até ~6 linhas). Nunca invente informações que não estejam no documento.'
+}
+
+// Resolve o modelo de mídia: env > config_ia.modelo (se não for '-lite') > padrão.
+async function modeloMidiaGemini(supabase: any): Promise<string> {
+  if (process.env.MIDIA_MODELO_GEMINI) return process.env.MIDIA_MODELO_GEMINI
+  try {
+    const { data } = await supabase.from('config_ia').select('modelo').eq('id', 1).maybeSingle()
+    const m = (data?.modelo || '').trim()
+    if (m.startsWith('gemini') && !m.includes('lite')) return m
+  } catch {
+    // config ausente → padrão
+  }
+  return MODELO_MIDIA_PADRAO
+}
+
+async function interpretarComGemini(
+  apiKey: string,
+  model: string,
+  tipo: 'audio' | 'imagem' | 'documento',
+  base64: string,
+  mime: string
+): Promise<string | null> {
+  const body = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: instrucaoMidia(tipo) },
+          { inline_data: { mime_type: mime, data: base64 } },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0, maxOutputTokens: tipo === 'audio' ? 1200 : 500 },
+  }
+  const r = await fetch(`${GEMINI_API}/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) {
+    console.error('[midia-gemini] falhou:', model, r.status, (await r.text()).slice(0, 300))
+    return null
+  }
+  const j: any = await r.json()
+  const txt: string = (j?.candidates?.[0]?.content?.parts || [])
+    .map((p: any) => p?.text || '')
+    .join('')
+    .trim()
+  return txt || null
+}
+
+// ── Fallback OpenAI (só se OPENAI_API_KEY existir) ──────────────────────────
 export async function transcreverAudio(base64: string, mimetype: string): Promise<string | null> {
   try {
     const buffer = Buffer.from(base64, 'base64')
@@ -105,7 +181,7 @@ export async function transcreverAudio(base64: string, mimetype: string): Promis
     })
     return tr.text?.trim() || null
   } catch (e) {
-    console.error('[midia] transcrição falhou:', e)
+    console.error('[midia] transcrição (openai) falhou:', e)
     return null
   }
 }
@@ -117,11 +193,7 @@ export async function descreverImagem(base64: string, mimetype: string): Promise
       model: 'gpt-4o',
       max_tokens: 300,
       messages: [
-        {
-          role: 'system',
-          content:
-            'Você descreve imagens enviadas por responsáveis no WhatsApp de uma escola de educação infantil. Em 1-2 frases, em português, diga objetivamente o que a imagem mostra (ex.: documento como RG, CPF, comprovante de residência ou de pagamento; print de conversa; foto da criança). Se houver texto legível relevante, resuma-o. Nunca invente informações.',
-        },
+        { role: 'system', content: instrucaoMidia('imagem') },
         {
           role: 'user',
           content: [
@@ -133,14 +205,42 @@ export async function descreverImagem(base64: string, mimetype: string): Promise
     })
     return resp.choices[0]?.message?.content?.trim() || null
   } catch (e) {
-    console.error('[midia] descrição de imagem falhou:', e)
+    console.error('[midia] descrição de imagem (openai) falhou:', e)
+    return null
+  }
+}
+
+async function descreverPdfOpenAI(base64: string, filename?: string): Promise<string | null> {
+  try {
+    const resp = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o',
+      max_tokens: 500,
+      messages: [
+        { role: 'system', content: instrucaoMidia('documento') },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Resuma este documento.' },
+            {
+              type: 'file',
+              file: { filename: filename || 'documento.pdf', file_data: `data:application/pdf;base64,${base64}` },
+            },
+          ] as any,
+        },
+      ],
+    })
+    return resp.choices[0]?.message?.content?.trim() || null
+  } catch (e) {
+    console.error('[midia] leitura de PDF (openai) falhou:', e)
     return null
   }
 }
 
 /**
  * Interpreta uma mídia já baixada (base64) e devolve um texto para a Sara.
- * Usado pelos dois canais (Evolution e Cloud).
+ * Caminho único dos três canais (WAHA, Cloud, Evolution). Lê áudio, imagem e
+ * PDF pelo Gemini (credencial do banco); se falhar e houver OPENAI_API_KEY,
+ * cai no Whisper/gpt-4o; falha real vira alerta (nunca degrada em silêncio).
  */
 export async function interpretarMidia(
   tipo: 'audio' | 'imagem' | 'documento',
@@ -149,26 +249,78 @@ export async function interpretarMidia(
   caption?: string,
   filename?: string
 ): Promise<string> {
-  if (tipo === 'audio') {
-    const texto = await transcreverAudio(base64, mimetype)
-    return texto || '[O responsável enviou um áudio que não consegui transcrever. Peça, com gentileza, que repita por texto.]'
+  const mime = limparMime(mimetype)
+  const ehImagem = tipo === 'imagem' || mime.startsWith('image/')
+  const ehAudio = tipo === 'audio' || mime.startsWith('audio/')
+  const ehPdf = mime === 'application/pdf'
+  const lerComModelo = ehAudio || ehImagem || ehPdf
+
+  const { createServerAdminClient } = await import('@/lib/supabase-server')
+  const supabase = createServerAdminClient()
+
+  let bruto: string | null = null
+  let tentouModelo = false
+
+  // 1) Gemini nativo (credencial do banco).
+  if (lerComModelo && geminiLe(mime)) {
+    try {
+      const { resolverCredencial } = await import('@/lib/ia-credenciais')
+      const cred = await resolverCredencial('sara', supabase)
+      if (cred.provedor === 'gemini' && cred.apiKey) {
+        tentouModelo = true
+        const model = await modeloMidiaGemini(supabase)
+        const tg = ehAudio ? 'audio' : ehImagem ? 'imagem' : 'documento'
+        bruto = await interpretarComGemini(cred.apiKey, model, tg, base64, mime)
+      }
+    } catch (e) {
+      console.error('[midia] gemini indisponível:', e)
+    }
   }
 
-  const ehImagem = tipo === 'imagem' || (mimetype || '').startsWith('image/')
+  // 2) Fallback OpenAI (só se a chave existir).
+  if (!bruto && lerComModelo && process.env.OPENAI_API_KEY) {
+    tentouModelo = true
+    bruto = ehAudio
+      ? await transcreverAudio(base64, mime)
+      : ehImagem
+        ? await descreverImagem(base64, mime)
+        : await descreverPdfOpenAI(base64, filename)
+  }
 
-  // Documento que na verdade é uma foto (ex.: comprovante enviado como arquivo) → visão.
+  // 3) Falha real (tentou ler e não conseguiu): alerta, nunca degrada calado.
+  if (tentouModelo && !bruto) {
+    try {
+      const { registrarAlerta } = await import('@/lib/alertas')
+      await registrarAlerta(supabase, 'midia/interpretar', `Não consegui interpretar ${tipo} (${mime || 'sem mimetype'}).`)
+    } catch {
+      // alerta é best-effort
+    }
+  }
+
+  // ── Monta o texto para a Sara ──────────────────────────────────────────────
+  if (ehAudio) {
+    return bruto || '[O responsável enviou um áudio que não consegui transcrever. Peça, com gentileza, que repita por texto.]'
+  }
+
   if (ehImagem) {
-    const desc = await descreverImagem(base64, mimetype)
-    const corpo = desc
-      ? `[O responsável enviou ${tipo === 'documento' ? 'um documento (imagem)' : 'uma imagem'}. Conteúdo: ${desc}]`
+    const corpo = bruto
+      ? `[O responsável enviou ${tipo === 'documento' ? 'um documento (imagem)' : 'uma imagem'}. Conteúdo: ${bruto}]`
       : '[O responsável enviou uma imagem que não consegui interpretar.]'
     return caption ? `${caption}\n${corpo}` : corpo
   }
 
-  // Documento não-imagem (PDF, etc.) — não dá para "ver" o conteúdo automaticamente.
+  if (ehPdf) {
+    const nome = filename || 'documento.pdf'
+    const corpo = bruto
+      ? `[O responsável enviou o documento "${nome}". Conteúdo: ${bruto}]`
+      : `[O responsável enviou um documento ("${nome}") que não consegui ler. Confirme o recebimento com gentileza e diga que a equipe vai conferir; se precisar de algum dado específico, peça por texto.]`
+    return caption ? `${caption}\n${corpo}` : corpo
+  }
+
+  // Tipo não legível automaticamente (ex.: .docx, .xlsx, vídeo, .zip).
   const nome = filename || 'arquivo'
   const corpo =
-    `[O responsável enviou um documento: "${nome}"${mimetype ? ` (${mimetype})` : ''}. ` +
+    `[O responsável enviou um documento: "${nome}"${mime ? ` (${mime})` : ''}. ` +
     `Provavelmente um comprovante/documento. Confirme o recebimento com gentileza e diga que a equipe vai conferir; ` +
     `se precisar de algum dado específico, peça por texto.]`
   return caption ? `${caption}\n${corpo}` : corpo

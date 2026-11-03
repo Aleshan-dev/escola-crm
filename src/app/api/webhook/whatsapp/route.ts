@@ -10,8 +10,10 @@ import {
 import { extrairConteudoMidia } from '@/lib/midia'
 import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere } from '@/lib/canais/webhook'
 
-// Dá folga para baixar mídia + transcrever/descrever + janela de debounce (15s).
-export const maxDuration = 60
+// Dá folga para baixar mídia + transcrever/descrever + janela de debounce (15s) + o
+// turno mais pesado da Sara. 60s estourava e a Vercel matava a função no meio (Sara
+// muda, trava presa — caso Vitor 30/10). 300 remove essa classe de timeout.
+export const maxDuration = 300
 
 export async function GET() {
   return NextResponse.json({ ok: true, msg: 'Webhook escola-crm online' })

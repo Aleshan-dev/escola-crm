@@ -944,7 +944,13 @@ export async function processarMensagemRecebida(
           if (!mesmoHorario) {
             const reagendou = !!visitaAberta
             if (visitaAberta) {
-              await supabase.from('tarefas').update({ data_hora: dhIso }).eq('id', visitaAberta.id)
+              // Zera o carimbo do resumo pré-visita: a visita mudou de horário, então o
+              // briefing precisa sair de novo ~30 min antes do NOVO horário (ver
+              // src/lib/lembrete-visita.ts).
+              await supabase
+                .from('tarefas')
+                .update({ data_hora: dhIso, resumo_pre_visita_em: null })
+                .eq('id', visitaAberta.id)
             } else {
               await supabase.from('tarefas').insert({
                 lead_id: lead.id,

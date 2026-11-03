@@ -29,7 +29,12 @@ import { lerConfigAnuncio, extrairReferralWaha, detectarOrigem } from '@/lib/atr
 // a resposta sairia pela sessão configurada, um número diferente do que o lead usou.
 // Toda mensagem fica na trilha crm.webhook_eventos (src/lib/canais/webhook.ts).
 
-export const maxDuration = 60
+// Teto GENEROSO: o turno mais pesado (ofertar visita depois do período) somado aos
+// 15s de debounce estourava os 60s e a Vercel MATAVA a função no meio — a Sara ficava
+// muda e a trava resposta_lock_em presa (caso Vitor 30/10). O dispatch-boletos já usa
+// 300 neste plano; aqui 300 remove de vez essa classe de timeout. Rede de segurança
+// complementar em src/lib/resgate.ts (acionada pelo heartbeat).
+export const maxDuration = 300
 
 export async function GET() {
   return NextResponse.json({ ok: true, msg: 'Webhook WAHA online' })

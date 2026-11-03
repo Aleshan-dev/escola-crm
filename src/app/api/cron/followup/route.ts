@@ -25,6 +25,7 @@ import { registrarAlerta } from '@/lib/alertas'
 import { notificarGestor } from '@/lib/notificacoes'
 import { dividirEmBaloes } from '@/lib/atendimento'
 import { ACRE_SHIFT_MS } from '@/lib/disponibilidade'
+import { enviarResumosPreVisita } from '@/lib/lembrete-visita'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 // 21/10/2026: com tudo saindo pelo WAHA (check-exists + envio ~4-5s por balão) e o
@@ -201,7 +202,14 @@ export async function GET(req: NextRequest) {
   if (!autenticado) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
-  return NextResponse.json(await executarFollowup())
+  // Resumo pré-visita (~30 min antes) roda por aqui (*/15, boa precisão) e também no
+  // heartbeat (*/30, rede de segurança). Independe de followup_ativo, então sai antes
+  // do núcleo e não é afetado pelos gates dele. Best-effort: não derruba o follow-up.
+  const resumoVisitas = await enviarResumosPreVisita(createServerAdminClient()).catch((e) => ({
+    erro: e instanceof Error ? e.message : String(e),
+  }))
+  const followup = await executarFollowup()
+  return NextResponse.json({ resumoVisitas, followup })
 }
 
 // Núcleo do follow-up, chamável pelo cron GET acima E EM PROCESSO pelo heartbeat
