@@ -328,6 +328,9 @@ export async function processarMensagemRecebida(
         canal: canal || 'organico',
         campanha: campanha || null,
         referral: (referral as object | null) ?? null,
+        // id do anúncio específico (CTWA sourceID), quando o referral o traz. First-touch,
+        // igual a canal/campanha/referral. Usado pelo acompanhamento por anúncio (/anuncios).
+        ad_id: (referral as { sourceID?: string } | null)?.sourceID ?? null,
       })
       .select('id, nome_responsavel, ja_responsavel')
       .single()
