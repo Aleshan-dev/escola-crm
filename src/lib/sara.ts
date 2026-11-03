@@ -54,7 +54,16 @@ export type SaraResposta = {
   crianca_dados: SaraCriancaDados | null
   transbordo: boolean
   motivo_transbordo: string | null
-  agendar_visita: { data_hora: string } | null
+  // A família confirmou um horário ofertado. `slot_id` é o id do slot escolhido
+  // (resolvido pelo servidor para o instante UTC exato — ver `slots_ofertados`);
+  // `data_hora` é o ISO que o modelo mandou, usado só como fallback quando não há
+  // slot casado. NUNCA grave direto o data_hora do modelo para um slot ofertado: ele
+  // carimbava a hora de parede como UTC e a visita entrava 2–5h cedo.
+  agendar_visita: { data_hora: string | null; slot_id: string | null } | null
+  // Horários que a Sara ofertou NESTE turno, cada um com o instante UTC autoritativo
+  // (gerado pelo servidor em `calcularSlotsDisponiveis`). O consumidor resolve
+  // `agendar_visita.slot_id` por aqui, sem confiar na aritmética de fuso do modelo.
+  slots_ofertados: { id: string; data_hora: string }[]
   sugerir_matricula: boolean
   // A Sara SUGERE encerrar o atendimento (conversa parece concluída). NUNCA silencia
   // sozinha: só levanta a bandeira para o gestor confirmar no botão. Ver atendimento.ts.
@@ -101,6 +110,38 @@ export function limparTexto(texto?: string | null): string {
     // vírgula órfã no fim de um balão
     .replace(/,[ \t]*$/gm, '')
     .trim()
+}
+
+/**
+ * Resgata SÓ o texto de "resposta" de um JSON malformado ou truncado, sem nunca
+ * devolver as chaves/escapes crus. Rede de segurança para o catch do parse: em
+ * 30/10/2026 um JSON cortado pelo maxTokens caiu no fallback `limparTexto(raw)` e a
+ * família recebeu `{ "resposta": "..."` literal, com o valor partido ("R$ 1." + "297,00").
+ * Lê do primeiro `"resposta": "` até a aspa de fechamento (ou o fim, se truncado),
+ * decodificando os escapes JSON. Devolve null se não achar o campo.
+ */
+export function extrairRespostaParcial(raw: string): string | null {
+  const abre = raw.match(/"resposta"\s*:\s*"/)
+  if (!abre) return null
+  let out = ''
+  for (let i = abre.index! + abre[0].length; i < raw.length; i++) {
+    const c = raw[i]
+    if (c === '\\') {
+      const n = raw[i + 1]
+      if (n === undefined) break // escape truncado no fim
+      if (n === 'u') {
+        out += String.fromCharCode(parseInt(raw.slice(i + 2, i + 6), 16) || 0)
+        i += 5
+      } else {
+        out += n === 'n' ? '\n' : n === 't' ? '\t' : n === 'r' ? '' : n // \" \\ \/ -> o próprio char
+        i += 1
+      }
+      continue
+    }
+    if (c === '"') break // fim da string de resposta
+    out += c
+  }
+  return out.trim() || null
 }
 
 /** Valores que o modelo usa como "ainda não sei" e que NÃO podem virar dado. */
@@ -321,6 +362,21 @@ ${listaRegras}`
     horizonteDias: 21,
   })
 
+  // IDs estáveis para cada horário ofertado NESTE turno (oferta padrão + agenda ampla,
+  // dedup por instante). A Sara devolve o `slot_id` que a família confirmou e o servidor
+  // o resolve para o INSTANTE UTC exato — o modelo nunca monta a data/hora, eliminando o
+  // bug de fuso (hora de parede carimbada como UTC → visita 2–5h cedo; casos Cris Ferreira
+  // e Régis Albuquerque em 29/10). `data_hora` de cada slot já vem correto de gerarSlots.
+  const slotsOfertados: { id: string; data_hora: string; label: string }[] = []
+  const _slotsVistos = new Set<string>()
+  for (const s of [...slots, ...slotsAmplos]) {
+    if (_slotsVistos.has(s.data_hora)) continue
+    _slotsVistos.add(s.data_hora)
+    slotsOfertados.push({ id: `v${slotsOfertados.length + 1}`, data_hora: s.data_hora, label: s.label })
+  }
+  const idDoSlot = (dataHora: string) =>
+    slotsOfertados.find((s) => s.data_hora === dataHora)?.id ?? ''
+
   // Grade semanal de visitas (dias/horários em que a escola RECEBE visita), para a
   // Sara saber o que é encaixável: se a família pede um dia sem janela de visita,
   // ela diz que naquele dia não há visita e oferece o dia de visita mais próximo.
@@ -368,9 +424,9 @@ AGENDAMENTO DE VISITA — HORÁRIOS REAIS DISPONÍVEIS
 A descoberta está completa (nome, idade e motivo capturados): você JÁ PODE oferecer a visita. Primeiro ESPELHE a dor da família com as palavras dela e ligue a visita a essa dor ("o que resolve essa insegurança é você ver a turma dele funcionando"), e só então ofereça os horários.
 
 OFERTA PADRÃO — ofereça primeiro SEMPRE e SOMENTE estas duas opções (NUNCA invente horários):
-${slots.map((s, i) => `Opção ${i + 1}: ${s.label}  [data_hora=${s.data_hora}]`).join('\n')}
-- Ao apresentar, use apenas o texto amigável (ex.: "${slots[0].label}"), sem mostrar o campo data_hora. Termine com pergunta fechada ("qual encaixa melhor?").
-- Quando a família ESCOLHER/CONFIRMAR uma opção, preencha "agendar_visita" com o data_hora EXATO (ISO) da opção escolhida e confirme a visita com alegria.
+${slots.map((s, i) => `Opção ${i + 1} [id=${idDoSlot(s.data_hora)}]: ${s.label}`).join('\n')}
+- Ao apresentar, use apenas o texto amigável (ex.: "${slots[0].label}"), sem mostrar o id. Termine com pergunta fechada ("qual encaixa melhor?").
+- Quando a família ESCOLHER/CONFIRMAR uma opção, preencha "agendar_visita" com o "slot_id" EXATO daquela opção (o código entre colchetes, ex.: "${idDoSlot(slots[0].data_hora)}") e confirme a visita com alegria. É pelo slot_id que a agenda grava o horário certo — NUNCA monte você mesma a data/hora.
 - O QUE NÃO É CONFIRMAÇÃO (nestes casos NUNCA preencha "agendar_visita" nem mova para Visita Agendada): interesse geral ("podemos sim", "quero conhecer"), pedido de prazo ("daqui a 3 semanas", "mês que vem"), condição futura ("quando ele chegar em Rio Branco", "quando conseguir folga") ou promessa de voltar ("depois eu marco", "te aviso"). Aí acolha, deixe a porta aberta e siga a conversa — o lead PERMANECE onde está. Só há agendamento quando ela crava UMA das opções (dia + hora).
 
 SE A FAMÍLIA DISSER QUE NÃO PODE NESSES DOIS HORÁRIOS (regra dura — leia com atenção):
@@ -379,8 +435,8 @@ SE A FAMÍLIA DISSER QUE NÃO PODE NESSES DOIS HORÁRIOS (regra dura — leia co
 3. Só ofereça horários que estejam na AGENDA AMPLA ou na OFERTA PADRÃO. Nunca invente.
 4. Só faça transbordo (transbordo=true, motivo "horário de visita solicitado indisponível") se o horário que ela pediu NÃO tiver NENHUMA data livre na agenda abaixo dentro das próximas 3 semanas. Aí sim avise que vai confirmar uma data especial com a equipe. Em qualquer outra situação, resolva você mesma o encaixe.
 
-AGENDA AMPLA — horários de visita livres nas próximas semanas (use SÓ para encaixar um pedido específico; NÃO liste tudo para a família):
-${slotsAmplos.map((s) => `- ${s.label}  [data_hora=${s.data_hora}]`).join('\n')}
+AGENDA AMPLA — horários de visita livres nas próximas semanas (use SÓ para encaixar um pedido específico; NÃO liste tudo para a família). Ao confirmar um destes, use o "slot_id" entre colchetes:
+${slotsAmplos.map((s) => `- [id=${idDoSlot(s.data_hora)}] ${s.label}`).join('\n')}
 ${listaGrade ? `\nDIAS/HORÁRIOS em que a escola recebe visita (fora disso não há visita):\n${listaGrade}` : ''}`
       : `
 ════════════════════════════════
@@ -430,7 +486,7 @@ ${casosAtivo
   ? '- Se a pergunta NÃO puder ser respondida com os dados acima: preencha "abrir_caso" (ver seção própria) e diga à família que vai confirmar e retorna em breve.'
   : '- Se a pergunta NÃO puder ser respondida com os dados acima: diga "Vou verificar essa informação com a equipe e te retorno em breve! 😊"'}
 - NUNCA invente endereço, telefone, valor, nome de professora ou qualquer dado não listado.
-- O endereço correto é: Rua Avestruz, nº 271, Bairro Nova Esperança, Rio Branco – Acre.
+- O endereço correto é: Rua Aloísio de Azevedo, nº 114, Bairro Floresta, Rio Branco – Acre.
 
 ${resolverDiretrizes(config)}
 ${blocoConfig}
@@ -523,7 +579,7 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "crianca_dados": { "nome": "...", "idade": 3, "idade_meses": 5, "serie_desejada": "G3", "periodo": "Integral", "motivo_busca": "o que a família busca / a dor, nas palavras dela" } ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
-  "agendar_visita": { "data_hora": "2026-07-02T14:00:00.000Z" } ou null,
+  "agendar_visita": { "slot_id": "v2" } ou null,
   "sugerir_matricula": false,
   "sugerir_encerramento": false,
   "motivo_encerramento": "texto ou null",
@@ -590,9 +646,13 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       transbordo: parsed.transbordo === true,
       motivo_transbordo: parsed.motivo_transbordo ?? null,
       agendar_visita:
-        parsed.agendar_visita && parsed.agendar_visita.data_hora
-          ? { data_hora: parsed.agendar_visita.data_hora }
+        parsed.agendar_visita && (parsed.agendar_visita.slot_id || parsed.agendar_visita.data_hora)
+          ? {
+              slot_id: typeof parsed.agendar_visita.slot_id === 'string' ? parsed.agendar_visita.slot_id : null,
+              data_hora: typeof parsed.agendar_visita.data_hora === 'string' ? parsed.agendar_visita.data_hora : null,
+            }
           : null,
+      slots_ofertados: slotsOfertados.map(({ id, data_hora }) => ({ id, data_hora })),
       sugerir_matricula: parsed.sugerir_matricula === true,
       sugerir_encerramento: parsed.sugerir_encerramento === true,
       motivo_encerramento: parsed.motivo_encerramento ?? null,
@@ -618,8 +678,13 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       memoria_salvar: memoriaAtiva ? parseMemoriaSalvar(parsed.memoria_salvar, memoria.mapa) : [],
     }
   } catch {
+    // JSON malformado/truncado: NUNCA despejar as chaves cruas para a família.
+    // Resgata só o campo "resposta"; se o bruto nem começa como JSON (texto puro do
+    // modelo), mantém o comportamento antigo de usar o bruto; senão, mensagem genérica.
+    const salvo = extrairRespostaParcial(raw)
+    const bruto = salvo ?? (raw.trimStart().startsWith('{') ? '' : raw)
     return {
-      resposta: limparTexto(raw) || 'Desculpe, não consegui responder agora.',
+      resposta: limparTexto(bruto) || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: null,
       razao_movimentacao: null,
       familia_dados: null,
@@ -627,6 +692,7 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       transbordo: false,
       motivo_transbordo: null,
       agendar_visita: null,
+      slots_ofertados: slotsOfertados.map(({ id, data_hora }) => ({ id, data_hora })),
       sugerir_matricula: false,
       sugerir_encerramento: false,
       motivo_encerramento: null,

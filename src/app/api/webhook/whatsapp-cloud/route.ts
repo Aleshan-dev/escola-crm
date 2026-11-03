@@ -10,8 +10,10 @@ import { assinaturaMetaValida, registrarWebhook, resultadoDaIngestao } from '@/l
 // Ordem de progressão dos recibos: só avança, nunca volta ('falhou' é o topo).
 const RANK_STATUS: Record<string, number> = { enviado: 1, entregue: 2, lido: 3, falhou: 4 }
 
-// Folga para baixar mídia + transcrever/descrever + janela de debounce (15s).
-export const maxDuration = 60
+// Folga para baixar mídia + transcrever/descrever + janela de debounce (15s) + o
+// turno mais pesado da Sara. 60s estourava e a Vercel matava a função no meio (Sara
+// muda, trava presa — caso Vitor 30/10). 300 remove essa classe de timeout.
+export const maxDuration = 300
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams

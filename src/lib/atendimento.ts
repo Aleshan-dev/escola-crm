@@ -2,7 +2,7 @@ import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
 import { completarDadosLead, salvarDadosLead } from '@/lib/dados-lead'
 import { notificarGestor } from '@/lib/notificacoes'
-import { labelAcre } from '@/lib/disponibilidade'
+import { labelAcre, dentroDaJanelaVisita, ACRE_SHIFT_MS } from '@/lib/disponibilidade'
 import { sleep } from '@/lib/pacing'
 import { identificarResponsavel } from '@/lib/sgei'
 import { processarMensagemSalomao } from '@/lib/salomao'
@@ -58,6 +58,10 @@ export { dividirEmBaloes }
 // latência da chamada ao modelo. A trava é considerada OBSOLETA após LOCK_TTL_MS,
 // para uma execução que morreu no meio (timeout/erro) não travar o lead p/ sempre.
 const LOCK_TTL_MS = 60_000
+// Janela em que um fromMe logo após um out_ia nosso é tratado como ECO de balão (não
+// handoff humano) — vale para qualquer caminho de envio, inclusive os que não seguram a
+// trava de resposta. Curta de propósito, para não mascarar um atendente que assume.
+const ECO_OUT_IA_JANELA_MS = 20_000
 
 /** Tenta virar a execução que responde este lead. UPDATE condicional atômico:
  *  o Postgres serializa a trava de linha, então de N execuções concorrentes só a
@@ -143,14 +147,56 @@ export async function registrarMensagemManual(
 
   const { data: lead } = await supabase
     .from('leads')
-    .select('id, ia_ativa')
+    .select('id, ia_ativa, resposta_lock_em')
     .eq('familia_id', fam.id)
     .order('criado_em', { ascending: false })
     .limit(1)
     .maybeSingle()
   if (!lead) return 'fromMe_sem_lead'
 
-  await supabase.from('mensagens').insert({
+  // Corrida do 1º balão: quando a Sara responde em vários balões, o eco fromMe de um
+  // balão pode chegar ANTES de o app gravar o out_ia dele — aí o dedupe por wid (acima)
+  // e o 23505 (abaixo) não pegam, o out_humano é inserido e a Sara se pausa sozinha
+  // ("atendente respondeu manualmente"). Enquanto a Sara está gerando/enviando a resposta
+  // deste lead, a trava `resposta_lock_em` está FRESCA (tomada em processarMensagemRecebida
+  // e só liberada no finally, cobrindo todo o laço de balões). Lock fresco ⇒ este fromMe é
+  // eco nosso: grava como out_ia (timeline limpa) e NÃO pausa.
+  const lockFresco = lead.resposta_lock_em != null
+    && Date.now() - new Date(lead.resposta_lock_em as string).getTime() < LOCK_TTL_MS
+
+  // Sinal INDEPENDENTE do caminho de envio: se há um out_ia nosso para este lead nos
+  // últimos segundos, uma resposta multi-balão está saindo e este fromMe é o eco de um
+  // balão — vale também para caminhos que NÃO seguram a trava (botão "responder agora",
+  // follow-up, Caso), onde só o lock não bastaria (foi assim que a Sara voltou a pausar
+  // no 2º balão de uma resposta manual).
+  let outIaRecente = false
+  if (!lockFresco) {
+    const limite = new Date(Date.now() - ECO_OUT_IA_JANELA_MS).toISOString()
+    const { data: ultimaOutIa } = await supabase
+      .from('mensagens')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('direcao', 'out_ia')
+      .gt('criado_em', limite)
+      .limit(1)
+      .maybeSingle()
+    outIaRecente = ultimaOutIa != null
+  }
+
+  if (lockFresco || outIaRecente) {
+    await supabase.from('mensagens').insert({
+      lead_id: lead.id,
+      direcao: 'out_ia',
+      agente: 'sara',
+      agente_origem: 'conversa',
+      conteudo,
+      whatsapp_message_id: wid || null,
+      ...(canal ? { canal_whatsapp: canal, canal_ref: canalRef ?? null } : {}),
+    }) // 23505 aqui = o app já gravou o out_ia deste balão; mesma linha, pode ignorar
+    return 'fromMe_sara'
+  }
+
+  const { error: erroInsert } = await supabase.from('mensagens').insert({
     lead_id: lead.id,
     direcao: 'out_humano',
     agente: 'humano',
@@ -159,6 +205,17 @@ export async function registrarMensagemManual(
     whatsapp_message_id: wid || null,
     ...(canal ? { canal_whatsapp: canal, canal_ref: canalRef ?? null } : {}),
   })
+
+  // Dedupe autoritativo: se o wid já existe (índice único uq_mensagens_whatsapp_message_id),
+  // é o ECO da própria Sara — o fromMe do WAHA chega tão rápido que corre com a gravação do
+  // out_ia, e o SELECT acima pode rodar antes dela commitar. Nesse caso NÃO pausar a IA:
+  // tratar como envio nosso já registrado. Sem isto, todo lead recebe a 1ª resposta e a Sara
+  // se cala (a própria mensagem dela vira "atendente respondeu manualmente").
+  if (erroInsert) {
+    if ((erroInsert as { code?: string }).code === '23505') return 'fromMe_sara'
+    throw erroInsert
+  }
+
   // A conversa segue no canal por onde a equipe respondeu.
   if (canal && carimbarFamilia) await supabase.from('familias').update({ canal_whatsapp: canal }).eq('id', fam.id)
 
@@ -271,6 +328,9 @@ export async function processarMensagemRecebida(
         canal: canal || 'organico',
         campanha: campanha || null,
         referral: (referral as object | null) ?? null,
+        // id do anúncio específico (CTWA sourceID), quando o referral o traz. First-touch,
+        // igual a canal/campanha/referral. Usado pelo acompanhamento por anúncio (/anuncios).
+        ad_id: (referral as { sourceID?: string } | null)?.sourceID ?? null,
       })
       .select('id, nome_responsavel, ja_responsavel')
       .single()
@@ -342,6 +402,26 @@ export async function processarMensagemRecebida(
       .select('id, ia_ativa, coluna_id, sara_pode_mover, crianca_id, precisa_atendimento_humano, no_show_em, reagendamentos_count')
       .single()
     lead = ins.data
+
+    // Mesma corrida do primeiro contato que já tratamos na família: duas mensagens
+    // de um número NOVO chegam quase juntas, nenhuma das duas acha lead e as duas
+    // tentam inserir. A segunda bate no índice único uniq_lead_ativo_por_familia
+    // (um lead ativo por família, 23505) e a mensagem era PERDIDA com "Falha ao
+    // criar lead" (ex.: 27/10, 29/10 e 30/10/2026). Reconsulta e grava a mensagem
+    // no lead que o vencedor já criou, em vez de falhar.
+    if (!lead) {
+      const rel = await supabase
+        .from('leads')
+        .select('id, ia_ativa, coluna_id, sara_pode_mover, crianca_id, precisa_atendimento_humano, no_show_em, reagendamentos_count')
+        .eq('familia_id', familia.id)
+        .order('criado_em', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      lead = rel.data
+    }
+    if (!lead && ins.error) {
+      throw new Error(`Falha ao criar lead: ${ins.error.message}`)
+    }
   }
   if (!lead) throw new Error('Falha ao criar lead')
 
@@ -755,7 +835,7 @@ export async function processarMensagemRecebida(
         })
         await supabase.from('eventos_timeline').insert({
           lead_id: lead.id,
-          tipo: 'movimentacao',
+          tipo: 'movido_coluna',
           descricao: saraResult.motivo_arquivamento || 'Arquivado (candidato a vaga de emprego).',
         })
         return lead.id
@@ -810,11 +890,42 @@ export async function processarMensagemRecebida(
       // tarefa/evento na agenda com um horário CONCRETO e FUTURO — a família escolheu
       // uma das opções oferecidas. Interesse vago ou pedido de prazo NÃO agenda.
       let temSlotVisita = false
-      if (saraResult.agendar_visita?.data_hora) {
-        const dh = new Date(saraResult.agendar_visita.data_hora)
+      const av = saraResult.agendar_visita
+      // RAIZ DO FUSO (2026-10-29): o instante vem do SLOT ofertado (servidor), não da
+      // hora que o modelo monta. `slot_id` é resolvido em `slots_ofertados` para o UTC
+      // exato de `calcularSlotsDisponiveis`. Só quando não há slot casado é que caímos
+      // no `data_hora` cru + o clamp antigo (rede de segurança). Isso elimina o bug em
+      // que a Sara carimbava a parede como UTC e a visita entrava 2–5h cedo mesmo
+      // DENTRO da grade (casos Cris Ferreira e Régis Albuquerque).
+      const slotOfertado = av?.slot_id
+        ? saraResult.slots_ofertados.find((s) => s.id === av.slot_id)
+        : undefined
+      if (av && (slotOfertado || av.data_hora)) {
+        const dh = slotOfertado ? new Date(slotOfertado.data_hora) : new Date(av.data_hora as string)
         if (!isNaN(dh.getTime()) && dh.getTime() > Date.now()) {
           temSlotVisita = true
-          const dhIso = dh.toISOString()
+
+          // Grade de visitas (usada no fallback de fuso e no aviso de "fora da grade").
+          const { data: gradeAtiva } = await supabase
+            .from('horarios_visita')
+            .select('dia_semana, hora_inicio, hora_fim')
+            .eq('ativo', true)
+          const grade = gradeAtiva && gradeAtiva.length > 0 ? gradeAtiva : null
+
+          // Fallback sem slot casado (horário fora do ofertado). Correção de fuso
+          // (2026-10-27): a Sara às vezes carimba a HORA DE PAREDE como UTC — a visita
+          // entra 5h cedo (ex.: 08:00 Acre vira 08:00Z) e some da agenda; pior, o no-show
+          // passava a disparar na HORA da visita (caso Aline: resgate às 08:00 em ponto,
+          // com a família já no portão). Regra: respeitar SEMPRE o fuso do Google Agenda
+          // (America/Rio_Branco, UTC-5). Se o instante cai FORA da grade mas +5h cai
+          // DENTRO, é esse bug — reescrevemos para o instante real. Com slot casado o
+          // instante já é autoritativo, então pulamos o clamp.
+          let dhFinal = dh
+          if (!slotOfertado && grade && !dentroDaJanelaVisita(dh.toISOString(), grade)) {
+            const corrigido = new Date(dh.getTime() - ACRE_SHIFT_MS) // +5h: parede-em-UTC -> instante real
+            if (dentroDaJanelaVisita(corrigido.toISOString(), grade)) dhFinal = corrigido
+          }
+          const dhIso = dhFinal.toISOString()
 
           // REAGENDAMENTO (2026-09-16): antes o dedup era só por horário EXATO, então
           // toda mudança de horário criava uma tarefa NOVA e deixava a antiga órfã
@@ -831,12 +942,18 @@ export async function processarMensagemRecebida(
             .limit(1)
             .maybeSingle()
 
-          const mesmoHorario = visitaAberta && new Date(visitaAberta.data_hora).getTime() === dh.getTime()
+          const mesmoHorario = visitaAberta && new Date(visitaAberta.data_hora).getTime() === dhFinal.getTime()
 
           if (!mesmoHorario) {
             const reagendou = !!visitaAberta
             if (visitaAberta) {
-              await supabase.from('tarefas').update({ data_hora: dhIso }).eq('id', visitaAberta.id)
+              // Zera o carimbo do resumo pré-visita: a visita mudou de horário, então o
+              // briefing precisa sair de novo ~30 min antes do NOVO horário (ver
+              // src/lib/lembrete-visita.ts).
+              await supabase
+                .from('tarefas')
+                .update({ data_hora: dhIso, resumo_pre_visita_em: null })
+                .eq('id', visitaAberta.id)
             } else {
               await supabase.from('tarefas').insert({
                 lead_id: lead.id,
@@ -869,8 +986,19 @@ export async function processarMensagemRecebida(
             await notificarGestor(
               supabase,
               'visita',
-              `📅 *Visita ${reagendou ? 'reagendada' : 'agendada'} pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nQuando: ${labelAcre(dh)}`
+              `📅 *Visita ${reagendou ? 'reagendada' : 'agendada'} pela Sara*\nFamília: ${familia.nome_responsavel || 'Família'}\nQuando: ${labelAcre(dhFinal)}`
             )
+            // Blindagem de fuso (2026-10-26): mesmo após a correção acima, se o horário
+            // AINDA cai FORA da grade de visitas (ex.: a família cravou um horário que a
+            // escola não atende), avisamos o gestor — aí não dá para inferir o instante
+            // certo sozinho.
+            if (grade && !dentroDaJanelaVisita(dhIso, grade)) {
+              await notificarGestor(
+                supabase,
+                'visita',
+                `⚠️ *Confira esta visita* — caiu FORA da grade de visitas.\nFamília: ${familia.nome_responsavel || 'Família'}\nHorário gravado: ${labelAcre(dhFinal)} (Acre)\nPode ser erro de fuso da IA. Ajuste o horário na agenda se preciso.`
+              )
+            }
           }
         }
       }
@@ -933,7 +1061,7 @@ export async function processarMensagemRecebida(
           })
 
           await supabase.from('eventos_timeline').insert({
-            lead_id: lead.id, tipo: 'movimentacao',
+            lead_id: lead.id, tipo: 'movido_coluna',
             descricao: `Sara moveu de "${colunaAtual.nome}" para "${proximaColuna.nome}". Motivo: ${saraResult.razao_movimentacao || 'não informado'}`,
           })
 

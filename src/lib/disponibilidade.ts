@@ -44,6 +44,28 @@ export function labelAcre(utc: Date): string {
   return `${diaSemana}, ${dd}/${mm} às ${hh}:${min}`
 }
 
+/**
+ * A hora de PAREDE (Acre) deste instante cai dentro de alguma janela de visita ativa?
+ * Blindagem de fuso (2026-10-26): a Sara às vezes devolve `data_hora` com a hora de
+ * parede carimbada como UTC (ex.: "08:00Z" para uma visita de 08:00 Acre, que de fato
+ * é 13:00Z), gravando a visita 5h cedo — fora da grade e, muitas vezes, fora da faixa
+ * visível da agenda. Quem booka usa isto para ALERTAR o gestor quando o horário cai
+ * fora da grade (não reescrevemos: a família recebeu uma hora específica).
+ */
+export function dentroDaJanelaVisita(iso: string, horarios: HorarioVisita[]): boolean {
+  const ms = new Date(iso).getTime()
+  if (isNaN(ms)) return false
+  const w = new Date(ms + ACRE_SHIFT_MS) // parede de Acre via getUTC*
+  const dia = DIAS_PT[w.getUTCDay()]
+  const minutos = w.getUTCHours() * 60 + w.getUTCMinutes()
+  return horarios.some((h) => {
+    if (h.dia_semana !== dia || !h.hora_inicio || !h.hora_fim) return false
+    const ini = parseHora(h.hora_inicio)
+    const fim = parseHora(h.hora_fim)
+    return minutos >= ini.hora * 60 + ini.min && minutos < fim.hora * 60 + fim.min
+  })
+}
+
 export type OpcoesSlot = {
   quantidade?: number
   duracaoMin?: number

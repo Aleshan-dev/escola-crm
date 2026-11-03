@@ -25,6 +25,7 @@ import { registrarAlerta } from '@/lib/alertas'
 import { notificarGestor } from '@/lib/notificacoes'
 import { dividirEmBaloes } from '@/lib/atendimento'
 import { ACRE_SHIFT_MS } from '@/lib/disponibilidade'
+import { enviarResumosPreVisita } from '@/lib/lembrete-visita'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 // 21/10/2026: com tudo saindo pelo WAHA (check-exists + envio ~4-5s por balão) e o
@@ -81,11 +82,15 @@ async function marcarPerdidosPorSilencio(
   supabase: ReturnType<typeof createServerAdminClient>,
   agora: number
 ): Promise<number> {
-  const { data: colunas } = await supabase.from('colunas').select('id, nome')
+  const { data: colunas } = await supabase.from('colunas').select('id, nome, funil_id')
   if (!colunas) return 0
-  const cols = colunas as { id: string; nome: string }[]
-  const perdidos = cols.find((c) => /perdid/i.test(c.nome))
-  if (!perdidos) return 0
+  const cols = colunas as { id: string; nome: string; funil_id: string }[]
+  // O nome "Perdidos" se repete entre funis (Captação, Campanha 2027...). Move o lead
+  // para o "Perdidos" DO PRÓPRIO funil — nunca para o de outro funil.
+  const perdidosPorFunil = new Map<string, string>()
+  for (const c of cols) if (/perdid/i.test(c.nome)) perdidosPorFunil.set(c.funil_id, c.id)
+  if (perdidosPorFunil.size === 0) return 0
+  const funilDaColuna = new Map<string, string>(cols.map((c) => [c.id, c.funil_id]))
   const terminaisIds = new Set(cols.filter((c) => /matric|perdid/i.test(c.nome)).map((c) => c.id))
 
   const { data: candidatos } = await supabase
@@ -99,10 +104,13 @@ async function marcarPerdidosPorSilencio(
     if (terminaisIds.has(l.coluna_id)) continue
     if (!deveMarcarPerdidoPorSilencio(ms(l.ultimo_followup_em), agora)) continue
 
+    const perdidosId = perdidosPorFunil.get(funilDaColuna.get(l.coluna_id) ?? '')
+    if (!perdidosId) continue // funil do lead sem coluna "Perdidos": não move
+
     await supabase
       .from('leads')
       .update({
-        coluna_id: perdidos.id,
+        coluna_id: perdidosId,
         entrou_coluna_em: new Date().toISOString(),
         motivo_perda: 'Sem resposta após follow-ups',
       })
@@ -115,12 +123,12 @@ async function marcarPerdidosPorSilencio(
       razao: 'sem_resposta',
       sucesso: true,
       coluna_origem_id: l.coluna_id,
-      coluna_destino_id: perdidos.id,
+      coluna_destino_id: perdidosId,
     })
 
     await supabase.from('eventos_timeline').insert({
       lead_id: l.id,
-      tipo: 'movimentacao',
+      tipo: 'movido_coluna',
       descricao: `Movido para "Perdidos" automaticamente — sem resposta por ${DIAS_SILENCIO_PERDIDO} dias após os follow-ups.`,
     })
 
@@ -194,7 +202,14 @@ export async function GET(req: NextRequest) {
   if (!autenticado) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
-  return NextResponse.json(await executarFollowup())
+  // Resumo pré-visita (~30 min antes) roda por aqui (*/15, boa precisão) e também no
+  // heartbeat (*/30, rede de segurança). Independe de followup_ativo, então sai antes
+  // do núcleo e não é afetado pelos gates dele. Best-effort: não derruba o follow-up.
+  const resumoVisitas = await enviarResumosPreVisita(createServerAdminClient()).catch((e) => ({
+    erro: e instanceof Error ? e.message : String(e),
+  }))
+  const followup = await executarFollowup()
+  return NextResponse.json({ resumoVisitas, followup })
 }
 
 // Núcleo do follow-up, chamável pelo cron GET acima E EM PROCESSO pelo heartbeat
@@ -263,6 +278,15 @@ export async function executarFollowup(agora: number = Date.now()) {
     .select('lead_id')
     .eq('estado', 'aguardando_equipe')
   const comCasoEsperando = new Set((casosEsperando ?? []).map((c: { lead_id: string }) => c.lead_id))
+
+  // Coluna "No Show": para onde o auto-detector move o lead quando a visita passa +1h
+  // sem ter sido marcada "realizada". Nome fixo do Kanban (ver triggerPorColuna).
+  const { data: colNoShow } = await supabase
+    .from('colunas')
+    .select('id')
+    .eq('nome', 'No Show')
+    .maybeSingle<{ id: string }>()
+  const noShowColunaId = colNoShow?.id ?? null
 
   const resultados: Resultado[] = []
   let enviados = 0
@@ -369,10 +393,17 @@ export async function executarFollowup(agora: number = Date.now()) {
           continue
         }
       } else {
-        // Sem visita futura: possível NO-SHOW (visita passou +2h e o lead segue em "Visita Agendada").
+        // Sem visita futura: possível NO-SHOW. A visita só vira no-show +2h DEPOIS do
+        // horário (o fuso é o do Google Agenda / Acre, corrigido já na gravação — ver
+        // atendimento.ts) e com o lead ainda em "Visita Agendada". A janela de 2h dá
+        // tempo de a família chegar/atrasar e de o gestor marcar a visita como realizada
+        // (ou movê-la para "Visita Realizada" — aí o lead nem cai neste trigger) ANTES
+        // de qualquer "você faltou". O que estourava antes não era a régua de +2h em si,
+        // e sim a hora-de-parede gravada 5h cedo, que fazia o resgate sair na HORA da
+        // visita (caso Aline, 27/10) — isso foi corrigido na gravação.
         const { data: passada } = await supabase
           .from('tarefas')
-          .select('data_hora')
+          .select('id, data_hora')
           .eq('lead_id', lead.id)
           .eq('tipo', 'visita')
           .eq('concluida', false)
@@ -389,12 +420,38 @@ export async function executarFollowup(agora: number = Date.now()) {
           resultados.push({ lead: lead.id, skip: 'no_show_esgotado' })
           continue
         }
-        // Primeira detecção: envia o resgate na hora e zera o contador; depois, backoff normal.
+        // Primeira detecção (+2h após o horário): marca a visita como ausente, MOVE o
+        // lead para a coluna "No Show", zera o contador e dispara o resgate na hora. Se
+        // a família tivesse comparecido, o gestor teria marcado "realizada" / movido
+        // para "Visita Realizada" — e não chegaríamos até aqui.
         if (!lead.no_show_em) {
           await supabase
-            .from('leads')
-            .update({ no_show_em: new Date().toISOString(), followup_count: 0 })
-            .eq('id', lead.id)
+            .from('tarefas')
+            .update({ concluida: true, status: 'ausente' })
+            .eq('id', passada.id)
+          const moveParaNoShow = !!noShowColunaId && lead.coluna_id !== noShowColunaId
+          const patch: Record<string, unknown> = { no_show_em: new Date().toISOString(), followup_count: 0 }
+          if (moveParaNoShow) {
+            patch.coluna_id = noShowColunaId
+            patch.entrou_coluna_em = new Date().toISOString()
+          }
+          await supabase.from('leads').update(patch).eq('id', lead.id)
+          if (moveParaNoShow) {
+            await supabase.from('acoes_sara').insert({
+              lead_id: lead.id,
+              tipo: 'movimentacao',
+              conteudo: 'No Show automático: visita passou +2h sem ser marcada como realizada.',
+              razao: 'no_show',
+              sucesso: true,
+              coluna_origem_id: lead.coluna_id,
+              coluna_destino_id: noShowColunaId,
+            })
+            await supabase.from('eventos_timeline').insert({
+              lead_id: lead.id,
+              tipo: 'movido_coluna',
+              descricao: 'Movido para "No Show" (visita não confirmada como realizada 2h após o horário).',
+            })
+          }
           count = 0
         } else if (
           !estaDevido(

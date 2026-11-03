@@ -37,6 +37,7 @@ export default function InicioPage() {
   const [periodo, setPeriodo] = useState('mes')
   const [fstats, setFstats] = useState<any>(null)
   const [invs, setInvs] = useState<any[]>([])
+  const [semanas, setSemanas] = useState<any[]>([])
 
   useEffect(() => {
     (async () => {
@@ -48,7 +49,7 @@ export default function InicioPage() {
         supabase.from('colunas').select('id, nome, ordem, funil_id').order('ordem'),
         supabase.from('leads').select('*, crianca:criancas(serie_desejada), familia:familias(canal)').eq('arquivado', false),
         supabase.from('tarefas').select('id, criado_em, lead_id, responsavel_id'),
-        supabase.from('metas_crescimento').select('nome, valor_meta'),
+        supabase.from('metas_crescimento').select('nome, valor_meta, periodo'),
         supabase.from('usuarios').select('id, nome'),
       ])
       const fs = (fr.data as any[]) || []
@@ -64,6 +65,12 @@ export default function InicioPage() {
       setFstats(fs2 || null)
       const { data: iv } = await supabase.from('investimento_canal').select('canal, periodo, valor')
       setInvs((iv as any[]) || [])
+      const { data: sem } = await supabase
+        .from('funil_metricas_semana')
+        .select('*')
+        .order('semana_inicio', { ascending: false })
+        .limit(8)
+      setSemanas((sem as any[]) || [])
       setLoading(false)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -79,7 +86,10 @@ export default function InicioPage() {
     const ts = tarefas.filter((t) => t.lead_id && leadIds.has(t.lead_id))
     const colMatricCaptacao = cols.find((c) => /matric/i.test(c.nome))
     const iniMes = (() => { const x = new Date(); x.setDate(1); x.setHours(0, 0, 0, 0); return x.getTime() })()
-    const somaMeta = (re: RegExp) => metas.filter((x) => re.test(x.nome || '')).reduce((s, x) => s + (x.valor_meta || 0), 0)
+    // Soma só a meta do ano-campanha mais recente (ex.: 2027). Sem isso, metas de anos
+    // anteriores que continuam como histórico (ex.: "Matrículas 2026") inflariam o alvo do KPI.
+    const anoAtivo = metas.length ? Math.max(...metas.map((x) => parseInt(x.periodo, 10) || 0)) : 0
+    const somaMeta = (re: RegExp) => metas.filter((x) => re.test(x.nome || '') && (parseInt(x.periodo, 10) || 0) === anoAtivo).reduce((s, x) => s + (x.valor_meta || 0), 0)
 
     // Quando um lead é matriculado, ele é transferido para o funil dedicado "Matriculados"
     // (colunas por série/turma), saindo do funil de captação. Portanto contamos as matrículas
@@ -215,6 +225,46 @@ export default function InicioPage() {
                     <FollowStat label="Taxa de resposta" v={fstats.leads_alcancados > 0 ? `${Math.round((fstats.leads_responderam / fstats.leads_alcancados) * 100)}%` : '—'} />
                   </div>
                   {fstats.falhas > 0 && <div className="mt-2 text-center text-xs text-amber-700">{fstats.falhas} envio(s) falharam</div>}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="mb-1 font-bold text-slate-900">Funil por semana</h2>
+              <p className="mb-4 text-xs text-slate-500">Throughput semanal para a reunião de captação: contato → visita agendada → realizada → matrícula.</p>
+              {semanas.length === 0 ? (
+                <p className="text-sm text-slate-400">Sem dados ainda.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase text-slate-400">
+                        <th className="py-2 pr-3">Semana</th>
+                        <th className="py-2 px-3 text-right">Contatos</th>
+                        <th className="py-2 px-3 text-right">Agendadas</th>
+                        <th className="py-2 px-3 text-right">Realizadas</th>
+                        <th className="py-2 px-3 text-right">No-show</th>
+                        <th className="py-2 px-3 text-right">Matrículas</th>
+                        <th className="py-2 pl-3 text-right">Contato→visita</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {semanas.map((s) => {
+                        const tx = s.contatos_novos > 0 ? Math.round((s.visitas_agendadas / s.contatos_novos) * 100) : null
+                        return (
+                          <tr key={s.semana}>
+                            <td className="py-2 pr-3 font-medium text-slate-700">{s.semana}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.contatos_novos}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.visitas_agendadas}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.visitas_realizadas}</td>
+                            <td className="py-2 px-3 text-right text-slate-600">{s.no_shows}</td>
+                            <td className="py-2 px-3 text-right font-semibold text-slate-900">{s.matriculas}</td>
+                            <td className="py-2 pl-3 text-right text-slate-600">{tx === null ? '—' : `${tx}%`}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

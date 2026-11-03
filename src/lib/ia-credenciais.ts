@@ -34,7 +34,7 @@ export type Mensagem = { role: 'system' | 'user' | 'assistant'; content: string 
 
 // O Maestro Guardião (chat de reorganização) não tem credencial própria: reusa a
 // da Sara (fallback env). Evita migração/coluna nova no config_ia vivo.
-async function resolverCredencial(
+export async function resolverCredencial(
   agente: 'sara' | 'salomao' | 'maestro',
   db: SupaAdmin,
   credencialId?: string | null

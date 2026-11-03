@@ -5,6 +5,8 @@ import { dentroHorarioComercial } from '@/lib/followup-regras'
 import { executarFollowup } from '../followup/route'
 import { cobrarCasosParados } from '@/lib/casos/cobranca'
 import { extrairMemoriasPendentes } from '@/lib/memoria/extracao'
+import { resgatarLeadsMudos } from '@/lib/resgate'
+import { enviarResumosPreVisita } from '@/lib/lembrete-visita'
 
 // ============================================================================
 // HEARTBEAT + GATILHO EM PROCESSO do motor de follow-up.
@@ -26,8 +28,9 @@ import { extrairMemoriasPendentes } from '@/lib/memoria/extracao'
 // e não há aviso — só um dead-man switch EXTERNO cobriria isso (rejeitado no ADR-008).
 // ============================================================================
 
-// Roda o follow-up em processo; folga de tempo para o loop + pacing (jitter entre envios).
-export const maxDuration = 120 // mesmo teto do /api/cron/followup (orçamento interno de 80s)
+// Roda o follow-up em processo + o resgate de leads mudos (cada resgate é uma chamada
+// ao modelo). 300 dá folga para o loop + pacing (jitter) sem o próprio heartbeat estourar.
+export const maxDuration = 300
 
 export async function GET(req: NextRequest) {
   const autorizado =
@@ -68,6 +71,33 @@ export async function GET(req: NextRequest) {
     return { erro: e instanceof Error ? e.message : String(e) }
   })
 
+  // Rede de segurança (src/lib/resgate.ts): reenvia a resposta da IA a leads que
+  // ficaram mudos porque o turno estourou o maxDuration do webhook e a função foi
+  // morta no meio (trava presa, nada logado — caso Vitor 30/10). Independe do
+  // follow-up estar ligado e roda a qualquer hora (a Sara responde 24h). Best-effort:
+  // uma falha aqui não derruba o resto do heartbeat.
+  const resgate = await resgatarLeadsMudos(supabase, { agoraMs: agora, orcamentoMs: 60_000 }).catch((e) => {
+    console.error('[heartbeat] resgate de leads mudos falhou:', e)
+    return { erro: e instanceof Error ? e.message : String(e) }
+  })
+  if ('resgatados' in resgate && resgate.resgatados > 0) {
+    await registrarAlerta(
+      supabase,
+      'cron/heartbeat',
+      `Resgate: ${resgate.resgatados} lead(s) que tinham ficado mudos (turno da IA morto por timeout) foram respondidos pela rede de segurança.`,
+      { tipo: 'sistema' }
+    )
+  }
+
+  // Resumo pré-visita (src/lib/lembrete-visita.ts): manda ao gestor o briefing do lead
+  // ~30 min antes da visita. O gatilho principal é o cron de follow-up (*/15); aqui é a
+  // rede de segurança (ADR-008: não criamos cron dedicado). Idempotente por claim-lock,
+  // então rodar pelas duas origens não duplica. Independe do follow-up estar ligado.
+  const resumoVisitas = await enviarResumosPreVisita(supabase, { agoraMs: agora }).catch((e) => {
+    console.error('[heartbeat] resumo pré-visita falhou:', e)
+    return { erro: e instanceof Error ? e.message : String(e) }
+  })
+
   try {
     // O follow-up está LIGADO? Se não, o heartbeat fica dormente (não aciona nem alarma).
     const { data: cfg } = await supabase
@@ -76,19 +106,19 @@ export async function GET(req: NextRequest) {
       .eq('id', 1)
       .maybeSingle<{ followup_ativo: boolean }>()
     if (!cfg?.followup_ativo) {
-      return NextResponse.json({ ok: true, pulado: 'followup_desligado', casos, memoria })
+      return NextResponse.json({ ok: true, pulado: 'followup_desligado', casos, memoria, resgate, resumoVisitas })
     }
 
     // Fora do horário comercial o motor não envia — nem tenta (evita ruído noturno).
     if (!dentroHorarioComercial(agora)) {
-      return NextResponse.json({ ok: true, pulado: 'fora_horario_comercial', memoria })
+      return NextResponse.json({ ok: true, pulado: 'fora_horario_comercial', memoria, resgate, resumoVisitas })
     }
 
     // GATILHO EM PROCESSO: roda o motor direto (rede de segurança contra o cron
     // dedicado da Vercel morrer sozinho). Alarme só se ISSO falhar.
     try {
       const resumo = await executarFollowup(agora)
-      return NextResponse.json({ ok: true, followup_ok: true, followup: resumo, casos, memoria })
+      return NextResponse.json({ ok: true, followup_ok: true, followup: resumo, casos, memoria, resgate, resumoVisitas })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       console.error('heartbeat -> executarFollowup falhou:', msg)

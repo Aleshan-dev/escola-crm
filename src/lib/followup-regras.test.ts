@@ -179,9 +179,13 @@ describe('promptPorTrigger', () => {
     expect(texto).toContain('NUNCA invente escassez')
   })
 
-  it('pós-visita manda ancorar o preço em vez de fugir do número', () => {
+  // AUDITORIA CMO 2026-10-29 — o pós-visita (D0) deixou de empilhar vaga + âncora de
+  // preço num toque só. Faz UM movimento (reconhecer + abrir a objeção); o preço se
+  // trata quando a objeção aparece.
+  it('pós-visita (D0) abre a objeção sem empilhar vaga nem preço', () => {
     const texto = promptPorTrigger('followup_pos_visita', 'Larissa', 1)
-    expect(texto).toContain('NUNCA fuja do número')
+    expect(texto).toContain('NÃO empilhe proposta de vaga nem valores')
+    expect(texto).not.toContain('ANCORE')
   })
 
   it('a primeira tentativa não leva texto de reforço', () => {
@@ -240,8 +244,8 @@ describe('promptPosVisitaPorToque', () => {
       expect(m).not.toMatch(/[—–]/)
     }
   })
-  it('D0 reaproveita a abordagem quente de pós-visita', () => {
-    expect(promptPosVisitaPorToque('Larissa', 0)).toContain('NUNCA fuja do número')
+  it('D0 reaproveita a abordagem quente de pós-visita (um movimento, sem empilhar)', () => {
+    expect(promptPosVisitaPorToque('Larissa', 0)).toContain('NÃO empilhe proposta de vaga nem valores')
   })
   it('D7 cita o depoimento quando fornecido, senão usa mensagem de valor', () => {
     const comDep = promptPosVisitaPorToque('Larissa', 2, 'meu filho floresceu na escola')
