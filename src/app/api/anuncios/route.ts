@@ -127,11 +127,49 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 4) Gasto do Meta por anúncio (defensivo: funil funciona mesmo sem token)
-  const meta = await buscarInsightsAnuncios({ since: ymd(since), until: ymd(until) })
+  // 4) Gasto por anúncio. Fonte primária: snapshot crm.anuncio_insights, escrito pela
+  // tarefa diária (puxa do Meta pela conexão do Claude) — dispensa token no app. Só se o
+  // snapshot estiver vazio tentamos a API ao vivo (quando houver token configurado).
+  type Insight = { spend: number; impressions: number | null; cpm: number | null; ctr: number | null; conversas: number | null }
+  const adIds = Array.from(grupos.values()).map((g) => g.adId).filter((x): x is string => !!x)
+  const porAd = new Map<string, Insight>()
+  let atualizadoEm: string | null = null
+
+  if (adIds.length) {
+    const { data: snapRows } = await db
+      .from('anuncio_insights')
+      .select('ad_id, spend, impressions, cpm, ctr, conversas, atualizado_em')
+      .in('ad_id', adIds)
+    for (const r of (snapRows || []) as Record<string, unknown>[]) {
+      porAd.set(String(r.ad_id), {
+        spend: Number(r.spend ?? 0),
+        impressions: r.impressions != null ? Number(r.impressions) : null,
+        cpm: r.cpm != null ? Number(r.cpm) : null,
+        ctr: r.ctr != null ? Number(r.ctr) : null,
+        conversas: r.conversas != null ? Number(r.conversas) : null,
+      })
+      const ts = r.atualizado_em ? String(r.atualizado_em) : null
+      if (ts && (!atualizadoEm || ts > atualizadoEm)) atualizadoEm = ts
+    }
+  }
+
+  let metaOk = porAd.size > 0
+  let metaErro: string | null = metaOk ? null : 'Sem snapshot de gasto ainda — a atualização diária ou o token do Meta preenchem aqui.'
+  if (porAd.size === 0) {
+    const live = await buscarInsightsAnuncios({ since: ymd(since), until: ymd(until) })
+    if (live.ok) {
+      for (const [id, v] of Object.entries(live.porAd)) {
+        porAd.set(id, { spend: v.spend, impressions: v.impressions, cpm: v.cpm, ctr: v.ctr, conversas: v.conversas })
+      }
+      metaOk = true
+      metaErro = null
+    } else {
+      metaErro = live.motivo
+    }
+  }
 
   const linhas = Array.from(grupos.values()).map((g) => {
-    const insight = meta.ok && g.adId ? meta.porAd[g.adId] : undefined
+    const insight = g.adId ? porAd.get(g.adId) : undefined
     const spend = insight?.spend ?? null
     const custo = (q: number) => (spend != null && q > 0 ? Number((spend / q).toFixed(2)) : null)
     return {
@@ -153,8 +191,9 @@ export async function GET(req: NextRequest) {
     dias,
     desde: ymd(since),
     ate: ymd(until),
-    metaOk: meta.ok,
-    metaErro: meta.ok ? null : meta.motivo,
+    metaOk,
+    metaErro,
+    atualizadoEm,
     linhas,
   })
 }
