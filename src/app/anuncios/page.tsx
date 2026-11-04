@@ -32,6 +32,7 @@ type Resposta = {
   ate: string
   metaOk: boolean
   metaErro: string | null
+  atualizadoEm: string | null
   linhas: Linha[]
 }
 
@@ -151,6 +152,9 @@ export default function AnunciosPage() {
         <p className="text-sm text-slate-500 mb-4">
           Leads reais que chegaram por anúncio, do contato à matrícula, cruzados com o gasto do Meta.
           {dados && <span className="text-slate-400"> · {dados.desde} a {dados.ate}</span>}
+          {dados?.atualizadoEm && (
+            <span className="text-slate-400"> · gasto atualizado em {new Date(dados.atualizadoEm).toLocaleString('pt-BR')}</span>
+          )}
         </p>
 
         {configAberto && (
