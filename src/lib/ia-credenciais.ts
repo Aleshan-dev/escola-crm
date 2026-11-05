@@ -59,6 +59,34 @@ export async function resolverCredencial(
   return { provedor: 'openai', apiKey: process.env.OPENAI_API_KEY || '' }
 }
 
+// Erro transitório do provedor (vale repetir): 429/5xx ou mensagem de sobrecarga.
+// O Gemini responde 503 "high demand / UNAVAILABLE" em picos; sem repetir, um
+// 503 passageiro derruba o turno inteiro da Sara (e a extração de ficha, e o
+// follow-up — todos passam por aqui).
+function ehErroTransiente(e: unknown): boolean {
+  const status = (e as { status?: number } | null)?.status
+  if (typeof status === 'number' && (status === 429 || status >= 500)) return true
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase()
+  return /overloaded|unavailable|high demand|rate limit|timeout|timed out|econnreset|etimedout|socket hang up|\b50[234]\b|try again/.test(msg)
+}
+
+// Repete a chamada em erro transitório, com backoff exponencial + jitter.
+// 3 tentativas no total (~0,6s e ~1,2s de espera) — cabe no maxDuration de 300s
+// dos webhooks. Erro definitivo (4xx de verdade, 404) não repete.
+async function comRetry<T>(fn: () => Promise<T>, tentativas = 3): Promise<T> {
+  let ultimo: unknown
+  for (let i = 0; i < tentativas; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      ultimo = e
+      if (i === tentativas - 1 || !ehErroTransiente(e)) throw e
+      await new Promise((r) => setTimeout(r, 600 * 2 ** i + Math.random() * 300))
+    }
+  }
+  throw ultimo
+}
+
 /** Extrai um objeto JSON de um texto (remove cercas ```json e preâmbulos). */
 export function extrairJson(texto: string): string {
   let t = texto.trim()
@@ -99,24 +127,24 @@ export async function chamarModeloIA(
     const conv = params.messages
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant', content: m.content }))
-    const resp = await anthropic.messages.create({
+    const resp = await comRetry(() => anthropic.messages.create({
       model: params.model,
       max_tokens: params.maxTokens,
       ...(sys ? { system: sys } : {}),
       messages: conv,
-    })
+    }))
     const txt = resp.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('')
     return params.jsonMode ? extrairJson(txt) : txt
   }
 
   // OpenAI-compatível (openai, gemini-via-google, openrouter, deepseek, requesty, custom)
   const client = new OpenAI({ apiKey, baseURL: baseUrl })
-  const resp = await client.chat.completions.create({
+  const resp = await comRetry(() => client.chat.completions.create({
     model: params.model,
     max_tokens: params.maxTokens,
     ...(params.jsonMode && SUPORTA_JSON.has(provedor) ? { response_format: { type: 'json_object' as const } } : {}),
     messages: params.messages,
-  })
+  }))
   const out = resp.choices[0]?.message?.content ?? ''
   return params.jsonMode ? extrairJson(out) : out
 }

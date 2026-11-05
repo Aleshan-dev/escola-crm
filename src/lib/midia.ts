@@ -91,9 +91,13 @@ export async function salvarMidiaStorage(
 
 // ── Gemini nativo: lê áudio, imagem e PDF numa só credencial ────────────────
 // A credencial (hoje Gemini) vem do banco, como o resto da IA — não do
-// OPENAI_API_KEY fixo. Modelos '-lite' nem sempre aceitam áudio/PDF, então
-// mídia usa um flash completo por padrão (MIDIA_MODELO_GEMINI sobrescreve).
-const MODELO_MIDIA_PADRAO = 'gemini-flash-latest'
+// OPENAI_API_KEY fixo. Mídia precisa de um flash multimodal; usamos modelos GA
+// estáveis em cadeia e, por último, o modelo configurado da escola.
+// MIDIA_MODELO_GEMINI entra na frente de tudo.
+// 05/11/2026: gemini-2.5-flash e gemini-2.0-flash foram APOSENTADOS pelo Google
+// (404 "no longer available … use gemini-3.8-flash"); cadeia atualizada para os
+// GA vigentes. O alias '-latest' fica no fim (dá 503 em picos de demanda).
+const MODELOS_MIDIA_PADRAO = ['gemini-3.8-flash', 'gemini-flash-latest']
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 function limparMime(mimetype: string): string {
@@ -115,26 +119,29 @@ function instrucaoMidia(tipo: 'audio' | 'imagem' | 'documento'): string {
   return 'Você analisa um documento enviado por um responsável no WhatsApp de uma escola de educação infantil. Em português, resuma objetivamente o conteúdo e extraia os dados relevantes: se for comprovante de pagamento, cite valor, data e banco/forma; se for contrato, diga se está assinado e os pontos principais; se for lista/material, liste os itens. Seja conciso (até ~6 linhas). Nunca invente informações que não estejam no documento.'
 }
 
-// Resolve o modelo de mídia: env > config_ia.modelo (se não for '-lite') > padrão.
-async function modeloMidiaGemini(supabase: any): Promise<string> {
-  if (process.env.MIDIA_MODELO_GEMINI) return process.env.MIDIA_MODELO_GEMINI
+// Lista de modelos a tentar, em ordem: env > GA estáveis > modelo configurado.
+async function modelosMidiaGemini(supabase: any): Promise<string[]> {
+  const lista: string[] = []
+  if (process.env.MIDIA_MODELO_GEMINI) lista.push(process.env.MIDIA_MODELO_GEMINI)
+  lista.push(...MODELOS_MIDIA_PADRAO)
   try {
     const { data } = await supabase.from('config_ia').select('modelo').eq('id', 1).maybeSingle()
     const m = (data?.modelo || '').trim()
-    if (m.startsWith('gemini') && !m.includes('lite')) return m
+    if (m.startsWith('gemini')) lista.push(m)
   } catch {
-    // config ausente → padrão
+    // config ausente → fica só com os padrões
   }
-  return MODELO_MIDIA_PADRAO
+  return [...new Set(lista)] // remove repetidos, preserva a ordem
 }
 
-async function interpretarComGemini(
+// Uma chamada ao Gemini. transiente=true em 429/5xx (vale repetir/trocar modelo).
+async function chamarGemini(
   apiKey: string,
   model: string,
   tipo: 'audio' | 'imagem' | 'documento',
   base64: string,
   mime: string
-): Promise<string | null> {
+): Promise<{ texto: string | null; transiente: boolean }> {
   const body = {
     contents: [
       {
@@ -147,21 +154,46 @@ async function interpretarComGemini(
     ],
     generationConfig: { temperature: 0, maxOutputTokens: tipo === 'audio' ? 1200 : 500 },
   }
-  const r = await fetch(`${GEMINI_API}/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify(body),
-  })
-  if (!r.ok) {
-    console.error('[midia-gemini] falhou:', model, r.status, (await r.text()).slice(0, 300))
-    return null
+  try {
+    const r = await fetch(`${GEMINI_API}/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(body),
+    })
+    if (!r.ok) {
+      console.error('[midia-gemini] falhou:', model, r.status, (await r.text()).slice(0, 300))
+      return { texto: null, transiente: r.status === 429 || r.status >= 500 }
+    }
+    const j: any = await r.json()
+    const txt: string = (j?.candidates?.[0]?.content?.parts || [])
+      .map((p: any) => p?.text || '')
+      .join('')
+      .trim()
+    return { texto: txt || null, transiente: false }
+  } catch (e) {
+    console.error('[midia-gemini] erro de rede:', model, e)
+    return { texto: null, transiente: true }
   }
-  const j: any = await r.json()
-  const txt: string = (j?.candidates?.[0]?.content?.parts || [])
-    .map((p: any) => p?.text || '')
-    .join('')
-    .trim()
-  return txt || null
+}
+
+// Tenta a cadeia de modelos: até 2 tentativas por modelo em erro transitório
+// (503/429/rede), passando ao próximo quando o erro é definitivo (404/400).
+async function interpretarComGemini(
+  apiKey: string,
+  models: string[],
+  tipo: 'audio' | 'imagem' | 'documento',
+  base64: string,
+  mime: string
+): Promise<string | null> {
+  for (const model of models) {
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
+      const { texto, transiente } = await chamarGemini(apiKey, model, tipo, base64, mime)
+      if (texto) return texto
+      if (!transiente) break // erro definitivo p/ este modelo → próximo da lista
+      await new Promise((r) => setTimeout(r, 800)) // backoff curto antes de repetir
+    }
+  }
+  return null
 }
 
 // ── Fallback OpenAI (só se OPENAI_API_KEY existir) ──────────────────────────
@@ -268,9 +300,9 @@ export async function interpretarMidia(
       const cred = await resolverCredencial('sara', supabase)
       if (cred.provedor === 'gemini' && cred.apiKey) {
         tentouModelo = true
-        const model = await modeloMidiaGemini(supabase)
+        const models = await modelosMidiaGemini(supabase)
         const tg = ehAudio ? 'audio' : ehImagem ? 'imagem' : 'documento'
-        bruto = await interpretarComGemini(cred.apiKey, model, tg, base64, mime)
+        bruto = await interpretarComGemini(cred.apiKey, models, tg, base64, mime)
       }
     } catch (e) {
       console.error('[midia] gemini indisponível:', e)
