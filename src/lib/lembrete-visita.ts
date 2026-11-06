@@ -238,11 +238,18 @@ function montarResumo(
   // Status da visita
   L.push('')
   const reag = lead?.reagendamentos_count ?? 0
-  L.push(
-    `${lead?.visita_confirmada_em ? '✅ Presença confirmada' : '⚠️ Presença não confirmada'}${
-      reag > 0 ? ` · já reagendou ${reag}x` : ''
-    }`
-  )
+  if (lead?.visita_confirmada_em) {
+    L.push(`✅ Presença confirmada${reag > 0 ? ` · já reagendou ${reag}x` : ''}`)
+  } else {
+    // Presença NÃO confirmada: CTA de ligação. O no-show cai muito quando alguém da
+    // escola liga para confirmar pouco antes (os 2 no-shows da semana de 03–06/11 não
+    // tinham confirmado). O telefone da família já aparece acima no briefing.
+    L.push(
+      `⚠️ *PRESENÇA NÃO CONFIRMADA* — vale uma ligação rápida agora para confirmar e evitar o no-show${
+        reag > 0 ? ` (já reagendou ${reag}x)` : ''
+      }.`
+    )
+  }
 
   return L.join('\n')
 }
