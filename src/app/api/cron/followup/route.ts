@@ -16,6 +16,7 @@ import {
   POS_VISITA_MAX_TOQUES,
   promptPorTrigger,
   promptPosVisitaPorToque,
+  reativacaoDevida,
   respondeuAposFollowup,
   triggerPorColuna,
   type TriggerNome,
@@ -51,6 +52,8 @@ type LeadRow = {
   no_show_em: string | null
   reagendamentos_count: number | null
   visita_confirmada_em: string | null
+  reativar_em: string | null
+  reativar_motivo: string | null
   familia: { telefone: string; nome_responsavel: string; whatsapp_phone_number_id: string | null; canal_whatsapp: string | null } | null
   coluna: {
     nome: string
@@ -219,9 +222,15 @@ export async function GET(req: NextRequest) {
 // followup_ativo, então é seguro chamar de qualquer origem já autenticada.
 export async function executarFollowup(agora: number = Date.now()) {
   const inicioExecucao = Date.now()
-  if (!dentroHorarioComercial(agora)) {
-    return { skipped: `fora_do_horario_comercial (${horaAcre(agora)}h Acre)` }
-  }
+  // ANTI-NO-SHOW (06/11/2026): antes, fora do horário comercial (8h–20h Acre) o cron
+  // retornava aqui e NADA rodava. Isso derrubava o lembrete de ~1h antes das visitas
+  // CEDO (ex.: 07:30): ele cairia ~06:30, antes das 8h, e nunca saía — a família só
+  // recebia a véspera e, sem resposta, faltava (os 2 no-shows de 03–06/11 eram ambos
+  // 07:30). Agora, FORA do horário, só o lembrete de visita IMINENTE passa (a família
+  // agendou essa visita — não é abordagem fria); todo o resto (recuperação,
+  // reengajamento, pós-visita, véspera, resgate de no-show, "Perdidos") segue preso ao
+  // horário comercial, pelos guards `foraDoHorario` abaixo.
+  const foraDoHorario = !dentroHorarioComercial(agora)
 
   const supabase = createServerAdminClient()
 
@@ -243,6 +252,7 @@ export async function executarFollowup(agora: number = Date.now()) {
       `id, coluna_id, familia_id, ultima_interacao_em, entrou_coluna_em, data_proxima_acao,
        followup_count, ultimo_followup_em, followup_status,
        no_show_em, reagendamentos_count, visita_confirmada_em,
+       reativar_em, reativar_motivo,
        familia:familias(telefone, nome_responsavel, whatsapp_phone_number_id, canal_whatsapp),
        coluna:colunas(nome, ordem, followup_intervalo_horas, followup_max)`
     )
@@ -315,6 +325,10 @@ export async function executarFollowup(agora: number = Date.now()) {
 
     const trigger = triggerPorColuna(col.nome)
 
+    // Fora do horário comercial (ver topo), só o lembrete de visita IMINENTE passa;
+    // todo o resto espera a janela de 8h–20h.
+    if (foraDoHorario && trigger !== 'confirmacao_visita') continue
+
     // O pós-visita se controla pelo PRÓPRIO cronograma (POS_VISITA_TOQUES_HORAS), não
     // pelo par followup_count/followup_max — por isso fica de fora deste guard genérico.
     if (trigger !== 'followup_pos_visita' && lead.followup_count >= col.followup_max) {
@@ -371,10 +385,20 @@ export async function executarFollowup(agora: number = Date.now()) {
           triggerLog = 'lembrete_1h'
           promptFollowup = `Envie um lembrete curto e caloroso para ${lead.familia!.nome_responsavel}: a visita ao Colégio Pequenos Guardiões é HOJE, daqui a cerca de 1 hora, às ${horaVisita}. Confirme que a escola está esperando por ela.`
           // Risco de no-show: perto da hora e ainda sem confirmação de presença.
+          // Além de marcar o risco, avisa o gestor para uma ligação rápida — a ligação
+          // humana derruba o no-show melhor que qualquer balão. Só 1x por visita (o
+          // dedup do lembrete_1h acima garante que este bloco roda uma única vez).
           if (!lead.visita_confirmada_em) {
             await supabase.from('leads').update({ risco_no_show: true }).eq('id', lead.id)
+            await notificarGestor(
+              supabase,
+              'visita',
+              `📞 *Visita sem confirmação* — ${lead.familia?.nome_responsavel || 'a família'} tem visita HOJE às ${horaVisita} e ainda NÃO confirmou presença. Vale uma ligação rápida agora (${tel}) para confirmar e evitar o no-show.`
+            ).catch(() => {})
           }
         } else if (ehVisitaAmanha(visitaMs, agora)) {
+          // Véspera é envio ativo: só em horário comercial (nunca de madrugada).
+          if (foraDoHorario) continue
           // Já confirmou ESTA visita? Não re-peça confirmação. Sem esta guarda, a
           // véspera pedia "confirme, por favor" de uma visita já confirmada — o lead
           // da Jessica (556993762605, 11/09) respondeu "De novo toda hora / Kkk".
@@ -393,6 +417,9 @@ export async function executarFollowup(agora: number = Date.now()) {
           continue
         }
       } else {
+        // Resgate de no-show é envio ativo: fora do horário comercial, espera a próxima
+        // rodada dentro da janela de 8h–20h (nunca de madrugada).
+        if (foraDoHorario) continue
         // Sem visita futura: possível NO-SHOW. A visita só vira no-show +2h DEPOIS do
         // horário (o fuso é o do Google Agenda / Acre, corrigido já na gravação — ver
         // atendimento.ts) e com o lead ainda em "Visita Agendada". A janela de 2h dá
@@ -516,6 +543,35 @@ export async function executarFollowup(agora: number = Date.now()) {
         )
         if (!devido) continue
       }
+    } else if (trigger === 'recuperacao') {
+      // REPESCAGEM — defer-aware (reengajamento agendado). A Sara pode ter combinado com a
+      // família uma data para retomar (reativar_em):
+      //   • data no FUTURO  → lead DORMENTE: nenhuma cutucada (anti-bloqueio). Como nunca é
+      //     tocado, não incrementa nem esgota, então o sweep de "Perdidos por silêncio"
+      //     (só mexe em followup_status='esgotado') também não o alcança.
+      //   • data JÁ CHEGOU → UM toque caloroso de reengajamento_agendado. Depois dele
+      //     limpamos reativar_em (abaixo) e o lead volta à cadência normal de recuperação.
+      //   • sem data        → recuperação normal (backoff da coluna), como antes.
+      const reativarMs = ms(lead.reativar_em)
+      if (reativarMs > agora) {
+        resultados.push({ lead: lead.id, skip: 'repescagem_dormente' })
+        continue
+      }
+      if (reativacaoDevida(reativarMs, agora)) {
+        triggerLog = 'reengajamento_agendado'
+        promptFollowup = promptPorTrigger(
+          'reengajamento_agendado',
+          lead.familia!.nome_responsavel,
+          1,
+          lead.reativar_motivo
+        )
+      } else {
+        const devido = estaDevido(
+          { ultimaInteracaoMs, ultimoFollowupMs, entrouColunaMs, intervaloBaseHoras: intervaloBase, count },
+          agora
+        )
+        if (!devido) continue
+      }
     } else {
       const devido = estaDevido(
         { ultimaInteracaoMs, ultimoFollowupMs, entrouColunaMs, intervaloBaseHoras: intervaloBase, count },
@@ -549,7 +605,7 @@ export async function executarFollowup(agora: number = Date.now()) {
     let viaAlerta = false
     let barradoPeloPortao: string | null = null
     try {
-      const saraResult = await gerarRespostaSara(lead.id, undefined, undefined, promptFollowup)
+      const saraResult = await gerarRespostaSara(lead.id, undefined, undefined, promptFollowup, null, { prioridade: 'baixa', origem: 'followup' })
       toques++ // conta a geração no teto por execução (envio real OU alerta manual)
       texto = saraResult.resposta
 
@@ -683,6 +739,12 @@ export async function executarFollowup(agora: number = Date.now()) {
           ? toquesPosVisita + 1 >= POS_VISITA_MAX_TOQUES
           : novoCount >= col.followup_max
       if (esgotou) update.followup_status = 'esgotado'
+      // Reengajamento agendado: o toque combinado saiu. Limpa a data para não repetir e
+      // deixa o lead retomar a cadência normal de recuperação (backoff) a partir daqui.
+      if (triggerLog === 'reengajamento_agendado' || triggerLog === 'reengajamento_agendado_alerta') {
+        update.reativar_em = null
+        update.reativar_motivo = null
+      }
       await supabase.from('leads').update(update).eq('id', lead.id)
 
       await supabase.from('acoes_sara').insert({
@@ -723,7 +785,9 @@ export async function executarFollowup(agora: number = Date.now()) {
   // Encerra por silêncio: leads que esgotaram os follow-ups e ficaram N dias sem responder.
   let perdidosPorSilencio = 0
   try {
-    perdidosPorSilencio = await marcarPerdidosPorSilencio(supabase, agora)
+    // Só em horário comercial: fora dele a rodada existe apenas para o lembrete de
+    // visita iminente e não deve mover leads para "Perdidos" de madrugada.
+    if (!foraDoHorario) perdidosPorSilencio = await marcarPerdidosPorSilencio(supabase, agora)
   } catch (e) {
     console.error('Falha ao marcar perdidos por silêncio:', e)
     await registrarAlerta(supabase, 'cron/followup', e instanceof Error ? e.message : 'perdidos_por_silencio')

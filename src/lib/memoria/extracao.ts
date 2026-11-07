@@ -65,6 +65,8 @@ Responda SOMENTE JSON: {"memoria_salvar": [{"titulo": "...", "corpo": "...", "su
       model: modelo,
       maxTokens: 500,
       jsonMode: true,
+      prioridade: 'baixa',
+      origem: 'memoria',
     },
     supabase
   )
@@ -105,8 +107,8 @@ export async function extrairMemoriasPendentes(
   const { data: pendentes, error } = await supabase.rpc('memoria_leads_pendentes', { p_limite: opts.limite ?? 5 })
   if (error) throw new Error(`memoria_leads_pendentes: ${error.message}`)
 
-  const { data: conf } = await supabase.from('config_ia').select('modelo').eq('id', 1).maybeSingle()
-  const modelo = conf?.modelo?.trim() || 'gpt-4o'
+  const { data: conf } = await supabase.from('config_ia').select('modelo, modelo_auxiliar').eq('id', 1).maybeSingle()
+  const modelo = conf?.modelo_auxiliar?.trim() || conf?.modelo?.trim() || 'gpt-4o'
   const inicio = Date.now()
   const teto = opts.orcamentoMs ?? 25_000
   let leads = 0, gravadas = 0, erros = 0

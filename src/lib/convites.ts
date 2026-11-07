@@ -164,6 +164,9 @@ async function registrarConviteNoChat(
     await supabase.from('mensagens').insert({
       lead_id: lead.id,
       direcao: 'out_ia',
+      // O texto do convite (Arca) se apresenta como Salomão: rotular como sara faria a
+      // auditoria ler "Sara se passando por Salomão" (caso Aline, 04/11).
+      agente: 'salomao',
       conteudo: `📝 Convite de pré-matrícula enviado\n\n${it.mensagem ?? ''}`,
       whatsapp_message_id: wid,
       canal_whatsapp: canalNaoOficial(), // campanha: sai pelo canal de disparos

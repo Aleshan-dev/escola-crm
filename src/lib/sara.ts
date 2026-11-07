@@ -4,6 +4,7 @@ import { getOcupacaoDireta } from '@/lib/sgei'
 import { formatarIdade } from '@/lib/idade'
 import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
 import { chamarModeloIA } from '@/lib/ia-credenciais'
+import type { PrioridadeIA } from '@/lib/ia-rpm'
 import { REGRA_ABRIR_CASO, blocoCasoAberto, type EstadoCaso } from '@/lib/casos/regras'
 import { CAMPO_JSON_MEMORIA, ORCAMENTO_PADRAO, blocoMemoria, parseMemoriaSalvar, type PedidoMemoria } from '@/lib/memoria/regras'
 import { carregarMemoria } from '@/lib/memoria/servico'
@@ -59,7 +60,12 @@ export type SaraResposta = {
   // `data_hora` é o ISO que o modelo mandou, usado só como fallback quando não há
   // slot casado. NUNCA grave direto o data_hora do modelo para um slot ofertado: ele
   // carimbava a hora de parede como UTC e a visita entrava 2–5h cedo.
-  agendar_visita: { data_hora: string | null; slot_id: string | null } | null
+  // `hora_acre` ("HH:MM") + `data_acre` opcional ("AAAA-MM-DD") reagendam/agendam por
+  // HORA DE PAREDE de Acre, resolvida no servidor (acreWallToUtc) — sem o bug de fuso e
+  // sem precisar de um slot pré-ofertado, para encaixar um horário DENTRO DA GRADE que a
+  // família pediu (ex.: mudar a visita de hoje de 14:00 para 14:30). Sem data_acre, o
+  // servidor usa a data da visita já marcada (mudança no mesmo dia).
+  agendar_visita: { data_hora: string | null; slot_id: string | null; data_acre?: string | null; hora_acre?: string | null } | null
   // Horários que a Sara ofertou NESTE turno, cada um com o instante UTC autoritativo
   // (gerado pelo servidor em `calcularSlotsDisponiveis`). O consumidor resolve
   // `agendar_visita.slot_id` por aqui, sem confiar na aritmética de fuso do modelo.
@@ -81,10 +87,20 @@ export type SaraResposta = {
   // Só o atendimento real grava (atendimento.ts / api/sara/responder); preview e
   // teste de rascunho apenas leem.
   memoria_salvar: PedidoMemoria[]
+  // REENGAJAMENTO AGENDADO (Repescagem): a família quer decidir mais pra frente. A Sara
+  // combina um mês/período para retomar e grava a data em `reativar_em` (AAAA-MM-DD). O
+  // lead fica DORMENTE (o follow-up não cutuca) até lá; na data, a Sara manda sozinha um
+  // toque caloroso que cita o `motivo`. Persistido em atendimento.ts (valida data futura).
+  reengajamento: { reativar_em: string | null; motivo: string | null } | null
 }
 
 /** Turno extra no fim do histórico (retorno de Caso, reforço da guarda de promessa). */
-export type ExtrasSara = { turnoFinal?: string }
+export type ExtrasSara = {
+  turnoFinal?: string
+  /** Fila de RPM: turno de conversa = 'alta' (padrão); follow-up = 'baixa' (cede na rajada). */
+  prioridade?: PrioridadeIA
+  origem?: string
+}
 
 // AUDITORIA CMO 2026-07-29 — saneamento da saída da Sara.
 // Motivo: o corpus de 402 mensagens mostrou travessão copiado literalmente dos
@@ -92,6 +108,56 @@ export type ExtrasSara = { turnoFinal?: string }
 // a família ("[nome da criança]") e campos gravados com texto de espera
 // ("A confirmar", "...") que passam por dado preenchido no CRM.
 // O prompt já proíbe os três; isto é a rede de segurança em código.
+
+const DIAS_SEMANA_PT = [
+  'domingo',
+  'segunda-feira',
+  'terça-feira',
+  'quarta-feira',
+  'quinta-feira',
+  'sexta-feira',
+  'sábado',
+]
+
+/**
+ * Corrige "atropelo de data": a Sara gruda "hoje"/"amanhã" (e às vezes um dia da
+ * semana errado) numa data de visita que o modelo copiou do slot. Ex. real (Cris,
+ * 04/11): "hoje, quinta-feira, 05/11" sendo que hoje era quarta 04/11 — 05/11 é amanhã.
+ * Instrução de prompt não segura (o gpt-4o espelha o "hoje" da conversa), então aqui,
+ * em CÓDIGO, a palavra relativa e o dia da semana são recalculados a partir da data
+ * DD/MM que aparece no texto, no fuso de Acre. Determinístico, não depende do modelo.
+ * `acreNow` é um Date já deslocado para a PAREDE de Acre (lido via getUTC*).
+ */
+export function corrigirDiaRelativo(texto: string, acreNow: Date): string {
+  if (!texto) return texto
+  const hojeDD = acreNow.getUTCDate()
+  const hojeMM = acreNow.getUTCMonth() + 1
+  const amanha = new Date(acreNow.getTime() + 24 * 60 * 60 * 1000)
+  const amaDD = amanha.getUTCDate()
+  const amaMM = amanha.getUTCMonth() + 1
+
+  // (hoje|amanhã) [sep] [dia-da-semana [sep]] [dia ] DD/MM
+  const re =
+    /\b(hoje|amanh[ãa])([,\s]+)(?:((?:segunda|ter[çc]a|quarta|quinta|sexta)-feira|s[áa]bado|domingo)[,\s]+)?(?:dia\s+)?(\d{1,2})\/(\d{1,2})/gi
+
+  return texto.replace(re, (_full, _rel, _sep, weekdayPart, dd, mm) => {
+    const d = parseInt(dd, 10)
+    const m = parseInt(mm, 10)
+    let relativo: string
+    if (d === hojeDD && m === hojeMM) relativo = 'hoje'
+    else if (d === amaDD && m === amaMM) relativo = 'amanhã'
+    else relativo = '' // nem hoje nem amanhã: a palavra relativa estava errada, remove
+
+    const partes: string[] = []
+    if (relativo) partes.push(relativo)
+    if (weekdayPart) {
+      const alvo = new Date(Date.UTC(acreNow.getUTCFullYear(), m - 1, d))
+      partes.push(DIAS_SEMANA_PT[alvo.getUTCDay()]) // dia da semana real de DD/MM
+    }
+    const prefixo = partes.length ? partes.join(', ') + ', ' : ''
+    return `${prefixo}${dd}/${mm}`
+  })
+}
 
 /** Remove travessão e placeholders que escapem do prompt. */
 export function limparTexto(texto?: string | null): string {
@@ -435,6 +501,14 @@ SE A FAMÍLIA DISSER QUE NÃO PODE NESSES DOIS HORÁRIOS (regra dura — leia co
 3. Só ofereça horários que estejam na AGENDA AMPLA ou na OFERTA PADRÃO. Nunca invente.
 4. Só faça transbordo (transbordo=true, motivo "horário de visita solicitado indisponível") se o horário que ela pediu NÃO tiver NENHUMA data livre na agenda abaixo dentro das próximas 3 semanas. Aí sim avise que vai confirmar uma data especial com a equipe. Em qualquer outra situação, resolva você mesma o encaixe.
 
+NUNCA AFIRME UMA MUDANÇA DE AGENDA QUE VOCÊ NÃO EXECUTOU (regra dura):
+- Só diga que agendou / reagendou / "já ajustei o horário" / "já deixei marcado/confirmado para as Xh" QUANDO você preencher "agendar_visita" NESTE MESMO turno (com slot_id OU com hora_acre). Se você não vai preencher "agendar_visita", NÃO afirme que marcou nada — apenas ofereça horários ou diga que vai confirmar com a equipe.
+- Horário que a família pede FORA da grade de visitas (lista "DIAS/HORÁRIOS" abaixo): NÃO confirme sozinha. Ofereça o horário de visita mais próximo que exista, ou ${casosAtivo ? 'abra um Caso para a equipe confirmar esse horário especial' : 'diga que vai confirmar esse horário com a equipe e retorna'} — nunca diga que está "agendado/confirmado".
+
+REAGENDAR uma visita JÁ MARCADA (a família quer mudar o horário/dia de uma visita que já existe):
+- Se o novo horário está DENTRO da grade de visitas, preencha "agendar_visita" com "hora_acre" ("HH:MM", horário de Rio Branco/Acre). Se a mudança é para OUTRO dia, inclua "data_acre" ("AAAA-MM-DD"); se for no MESMO dia da visita atual, pode mandar só "hora_acre". O servidor move a visita para esse horário — aí sim confirme com alegria.
+- NÃO use "hora_acre" para um horário fora da grade: nesse caso vale a regra acima (não confirme; ofereça o mais próximo ou acione a equipe).
+
 AGENDA AMPLA — horários de visita livres nas próximas semanas (use SÓ para encaixar um pedido específico; NÃO liste tudo para a família). Ao confirmar um destes, use o "slot_id" entre colchetes:
 ${slotsAmplos.map((s) => `- [id=${idDoSlot(s.data_hora)}] ${s.label}`).join('\n')}
 ${listaGrade ? `\nDIAS/HORÁRIOS em que a escola recebe visita (fora disso não há visita):\n${listaGrade}` : ''}`
@@ -452,6 +526,12 @@ Não há horários de visita disponíveis no momento. Se a família quiser agend
   // "Bom dia" às 14h (lead da Jessica, 11/09). Datas seguem absolutas.
   const _acreNow = new Date(Date.now() - 5 * 60 * 60 * 1000)
   const hojeAcre = _acreNow.toLocaleDateString('pt-BR', { timeZone: 'UTC' })
+  // Dia da semana de HOJE e de AMANHÃ, para o modelo NUNCA chutar a data ao narrar
+  // "hoje"/"amanhã" (caso Cris Ferreira, 03/11: chamou terça 03/11 de "quarta 04/11").
+  const diaSemanaHoje = _acreNow.toLocaleDateString('pt-BR', { timeZone: 'UTC', weekday: 'long' })
+  const _amanhaAcre = new Date(_acreNow.getTime() + 24 * 60 * 60 * 1000)
+  const amanhaAcre = _amanhaAcre.toLocaleDateString('pt-BR', { timeZone: 'UTC' })
+  const diaSemanaAmanha = _amanhaAcre.toLocaleDateString('pt-BR', { timeZone: 'UTC', weekday: 'long' })
   const _horaAcre = _acreNow.getUTCHours()
   const agoraAcre = `${String(_horaAcre).padStart(2, '0')}:${String(_acreNow.getUTCMinutes()).padStart(2, '0')}`
   const periodoAcre = _horaAcre < 12 ? 'manhã' : _horaAcre < 18 ? 'tarde' : 'noite'
@@ -471,7 +551,8 @@ ${ocupacao.map((o) => `- ${o.turma}: ${o.vagas > 0 ? `${o.vagas} vaga(s) dispon�
 
   const systemPrompt = `${config?.system_prompt || 'Você é Sara, consultora de matrículas do Colégio Pequenos Guardiões.'}
 
-Hoje é ${hojeAcre}, agora são ${agoraAcre} (horário de Rio Branco/Acre) — período da ${periodoAcre}. Se for cumprimentar, use a saudação correta para a hora atual (bom dia até 11h59, boa tarde das 12h às 17h59, boa noite a partir das 18h). NUNCA diga "bom dia" à tarde ou à noite.
+Hoje é ${diaSemanaHoje}, ${hojeAcre}; amanhã é ${diaSemanaAmanha}, ${amanhaAcre}. Agora são ${agoraAcre} (horário de Rio Branco/Acre) — período da ${periodoAcre}. Se for cumprimentar, use a saudação correta para a hora atual (bom dia até 11h59, boa tarde das 12h às 17h59, boa noite a partir das 18h). NUNCA diga "bom dia" à tarde ou à noite.
+REGRA DE DATA (CRÍTICA): NUNCA calcule nem escreva de cabeça o dia da semana ou a data de uma visita. Ao citar, oferecer ou confirmar um horário, copie EXATAMENTE o rótulo do horário como aparece na lista de horários mais abaixo (ex.: "terça-feira, 03/11 às 15:30"). É PROIBIDO grudar "hoje"/"amanhã"/"hoje mais tarde" numa data de visita — escreva só o rótulo absoluto (dia da semana + DD/MM), nunca a palavra relativa junto. Mesmo que a família diga "hoje?", confira a data do horário contra a data de hoje acima: se o horário NÃO for hoje, corrija com gentileza ("na verdade seria quinta-feira, 05/11") em vez de repetir "hoje". Se o dia da semana que você ia escrever não bater com o rótulo do horário, o rótulo está certo e você está errada.
 
 ════════════════════════════════
 BASE DE CONHECIMENTO OFICIAL DA ESCOLA
@@ -569,6 +650,26 @@ ANÁLISE COGNITIVA INTERNA (campo "analise")
 Preencha "analise" com sua leitura interna do lead: intenção (ex.: pedido de preço, troca de escola), emoção predominante (ex.: medo, insegurança, pressa, confiança), temperatura ("frio", "morno", "quente" ou "pronto_visita"), e um score de 1 a 5 para interesse, urgencia e probabilidade de matrícula, além da próxima melhor ação. É CONTEXTO INTERNO do CRM — NUNCA apareça para a família nem no campo "resposta".
 
 ════════════════════════════════
+REGRA DE IDADE (CRÍTICA)
+════════════════════════════════
+Em "crianca_dados": "idade" é a idade ATUAL da criança em ANOS COMPLETOS (número inteiro), exatamente como a família disse HOJE. "idade_meses" são os meses ALÉM dos anos (0–11).
+- "tem 2 anos" → idade 2, idade_meses 0. "1 ano e meio" → idade 1, idade_meses 6. "9 meses" → idade 0, idade_meses 9. "vai fazer 2 em dezembro" → ela ainda tem 1 → idade 1.
+- NUNCA calcule a idade que a criança TERÁ na matrícula ou no próximo ano — registre sempre a idade de HOJE. A série pode ser do ano que vem, mas a IDADE é a atual.
+- NUNCA deduza a idade a partir da série. Se a família NÃO disse a idade, deixe "idade" e "idade_meses" como null.
+- NÃO repita nem altere uma idade já coletada (mostrada em "DADOS JÁ COLETADOS") a menos que a família informe uma idade nova nesta conversa.
+
+════════════════════════════════
+REENGAJAMENTO — FAMÍLIA QUE QUER DECIDIR DEPOIS
+════════════════════════════════
+Quando a família sinalizar que NÃO vai decidir agora e quer resolver mais pra frente ("decido mais pra frente", "só mês que vem", "só ano que vem", "vou pensar e te aviso lá pra frente"):
+- NÃO insista em visita nem em decisão agora, e não fique cutucando. Acolha o tempo da família.
+- CONFIRME um mês/período alvo para VOCÊ retomar o contato ("posso te chamar de novo lá por [mês]?"). Se ela só disse algo vago ("ano que vem", "mais pra frente"), pergunte o mês para cravar antes de gravar.
+- Preencha "reengajamento.reativar_em" com a data combinada (AAAA-MM-DD; se só souber o mês, use o 1º dia dele) e "reengajamento.motivo" com o que ela disse, em 1 frase ("decidir em fevereiro, quando definir o trabalho"). A data tem que ser FUTURA.
+- Se a família NÃO quiser combinar um retorno, deixe "reengajamento" como null e siga normalmente.
+- Mova o lead para "Repescagem" (pediu prazo). Você vai retomar SOZINHA na data combinada com uma mensagem calorosa — então feche este turno deixando claro que volta a falar na época, sem pressão.
+- Em qualquer outro caso, deixe "reengajamento" como null.
+
+════════════════════════════════
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
 ════════════════════════════════
 {
@@ -579,14 +680,15 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "crianca_dados": { "nome": "...", "idade": 3, "idade_meses": 5, "serie_desejada": "G3", "periodo": "Integral", "motivo_busca": "o que a família busca / a dor, nas palavras dela" } ou null,
   "transbordo": false,
   "motivo_transbordo": "texto ou null",
-  "agendar_visita": { "slot_id": "v2" } ou null,
+  "agendar_visita": { "slot_id": "v2" } ou { "hora_acre": "14:30", "data_acre": "AAAA-MM-DD" } ou null,
   "sugerir_matricula": false,
   "sugerir_encerramento": false,
   "motivo_encerramento": "texto ou null",
   "resumo_anotacao": "1-2 frases com datas absolutas ou null",
   "analise": { "intencao": "texto", "emocao": "texto", "temperatura": "frio|morno|quente|pronto_visita", "interesse": 3, "urgencia": 3, "probabilidade": 3, "proxima_acao": "texto" },
   "arquivar": false,
-  "motivo_arquivamento": "texto ou null"${casosAtivo ? `,
+  "motivo_arquivamento": "texto ou null",
+  "reengajamento": { "reativar_em": "AAAA-MM-DD ou null", "motivo": "texto curto ou null" } ou null${casosAtivo ? `,
   "abrir_caso": { "titulo": "...", "resumo": "...", "motivo": "...", "tipo": "outro" } ou null,
   "atualizar_caso": { "informacao": "..." } ou null` : ''}${memoriaAtiva ? `,
   ${CAMPO_JSON_MEMORIA}` : ''}
@@ -631,6 +733,9 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
   const raw = (await chamarModeloIA('sara', {
     // 900: folga para memoria_salvar sem truncar o JSON (era 700).
     messages, model: modelo, maxTokens: 900, jsonMode: true,
+    prioridade: extras?.prioridade ?? 'alta', origem: extras?.origem ?? 'sara',
+    // 3.8 Flash grátis dá 503 "high demand" em picos: cai para o reserva em vez de calar.
+    modeloReserva: (config?.modelo_reserva as string | null | undefined) ?? null,
     // Rascunho sem credencial (null) cai na do banco — igual à produção quando ela também é vazia.
     credencialId: configOverride ? ((config?.sara_credencial_id as string | null) ?? null) : undefined,
   })) || '{}'
@@ -638,7 +743,7 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
   try {
     const parsed = JSON.parse(raw) as Partial<SaraResposta>
     return {
-      resposta: limparTexto(parsed.resposta) || 'Desculpe, não consegui responder agora.',
+      resposta: corrigirDiaRelativo(limparTexto(parsed.resposta), _acreNow) || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: parsed.proxima_coluna_id ?? null,
       razao_movimentacao: parsed.razao_movimentacao ?? null,
       familia_dados: limparDados(parsed.familia_dados),
@@ -646,10 +751,13 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       transbordo: parsed.transbordo === true,
       motivo_transbordo: parsed.motivo_transbordo ?? null,
       agendar_visita:
-        parsed.agendar_visita && (parsed.agendar_visita.slot_id || parsed.agendar_visita.data_hora)
+        parsed.agendar_visita &&
+        (parsed.agendar_visita.slot_id || parsed.agendar_visita.data_hora || parsed.agendar_visita.hora_acre)
           ? {
               slot_id: typeof parsed.agendar_visita.slot_id === 'string' ? parsed.agendar_visita.slot_id : null,
               data_hora: typeof parsed.agendar_visita.data_hora === 'string' ? parsed.agendar_visita.data_hora : null,
+              data_acre: typeof parsed.agendar_visita.data_acre === 'string' ? parsed.agendar_visita.data_acre : null,
+              hora_acre: typeof parsed.agendar_visita.hora_acre === 'string' ? parsed.agendar_visita.hora_acre : null,
             }
           : null,
       slots_ofertados: slotsOfertados.map(({ id, data_hora }) => ({ id, data_hora })),
@@ -676,6 +784,15 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
           ? { informacao: parsed.atualizar_caso.informacao.trim() }
           : null,
       memoria_salvar: memoriaAtiva ? parseMemoriaSalvar(parsed.memoria_salvar, memoria.mapa) : [],
+      reengajamento:
+        parsed.reengajamento &&
+        (typeof parsed.reengajamento.reativar_em === 'string' || typeof parsed.reengajamento.motivo === 'string')
+          ? {
+              reativar_em:
+                typeof parsed.reengajamento.reativar_em === 'string' ? parsed.reengajamento.reativar_em : null,
+              motivo: typeof parsed.reengajamento.motivo === 'string' ? parsed.reengajamento.motivo : null,
+            }
+          : null,
     }
   } catch {
     // JSON malformado/truncado: NUNCA despejar as chaves cruas para a família.
@@ -684,7 +801,7 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
     const salvo = extrairRespostaParcial(raw)
     const bruto = salvo ?? (raw.trimStart().startsWith('{') ? '' : raw)
     return {
-      resposta: limparTexto(bruto) || 'Desculpe, não consegui responder agora.',
+      resposta: corrigirDiaRelativo(limparTexto(bruto), _acreNow) || 'Desculpe, não consegui responder agora.',
       proxima_coluna_id: null,
       razao_movimentacao: null,
       familia_dados: null,
@@ -703,6 +820,7 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
       abrir_caso: null,
       atualizar_caso: null,
       memoria_salvar: [],
+      reengajamento: null,
     }
   }
 }

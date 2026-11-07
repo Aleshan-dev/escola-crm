@@ -99,6 +99,8 @@ export async function classificarIntencao(
         maxTokens: 80,
         jsonMode: true,
         credencialId: args.credencialId ?? null,
+        prioridade: 'alta',
+        origem: 'roteador',
       },
       supabase
     )

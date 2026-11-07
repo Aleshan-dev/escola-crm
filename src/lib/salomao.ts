@@ -224,7 +224,7 @@ Quando acao="financeiro" ou acao="pix", a "resposta" deve ser curta (ex.: "Um in
   const modelo = config?.salomao_modelo?.trim() || config?.modelo?.trim() || 'gpt-4o'
   const raw = (await chamarModeloIA('salomao', {
     // 700: folga para memoria_salvar sem truncar o JSON (era 500).
-    messages, model: modelo, maxTokens: 700, jsonMode: true,
+    messages, model: modelo, maxTokens: 700, jsonMode: true, prioridade: 'alta', origem: 'salomao',
     credencialId: configOverride ? (config?.salomao_credencial_id ?? null) : undefined,
   })) || '{}'
   try {

@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
 import { createServerAdminClient } from '@/lib/supabase-server'
+import { aguardarVagaIA, chaveRpm, type PrioridadeIA } from '@/lib/ia-rpm'
 
 // Credenciais de IA por provedor. A maioria usa o SDK da OpenAI (muda chave +
 // baseURL); o Gemini entra pelo endpoint compatível-OpenAI do Google (sem SDK
@@ -73,6 +74,19 @@ function ehErroTransiente(e: unknown): boolean {
 // Repete a chamada em erro transitório, com backoff exponencial + jitter.
 // 3 tentativas no total (~0,6s e ~1,2s de espera) — cabe no maxDuration de 300s
 // dos webhooks. Erro definitivo (4xx de verdade, 404) não repete.
+// 429 (cota por minuto do Gemini grátis) pede espera MAIOR que 503: a janela é de 60s,
+// então 0,6s não adianta — espera 5s e 10s. 503/rede segue no backoff curto.
+export function ehRateLimit(e: unknown): boolean {
+  const status = (e as { status?: number } | null)?.status
+  if (status === 429) return true
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase()
+  return /\b429\b|rate limit|resource_exhausted|quota/.test(msg)
+}
+
+export function esperaRetry(e: unknown, i: number): number {
+  return ehRateLimit(e) ? 5000 * 2 ** i + Math.random() * 1000 : 600 * 2 ** i + Math.random() * 300
+}
+
 async function comRetry<T>(fn: () => Promise<T>, tentativas = 3): Promise<T> {
   let ultimo: unknown
   for (let i = 0; i < tentativas; i++) {
@@ -81,7 +95,8 @@ async function comRetry<T>(fn: () => Promise<T>, tentativas = 3): Promise<T> {
     } catch (e) {
       ultimo = e
       if (i === tentativas - 1 || !ehErroTransiente(e)) throw e
-      await new Promise((r) => setTimeout(r, 600 * 2 ** i + Math.random() * 300))
+      if (ehRateLimit(e)) console.warn('[ia] 429 do provedor, aguardando para repetir')
+      await new Promise((r) => setTimeout(r, esperaRetry(e, i)))
     }
   }
   throw ultimo
@@ -112,11 +127,25 @@ export async function chamarModeloIA(
     jsonMode?: boolean
     /** Credencial específica (ex.: a do roteador); sem ela, vale a do agente. */
     credencialId?: string | null
+    /** Fila de RPM: 'alta' = turno de conversa; 'baixa' = trabalho de fundo (cede na rajada). */
+    prioridade?: PrioridadeIA
+    /** Rótulo para a métrica de chamadas (crm.ia_chamadas.origem). */
+    origem?: string
+    /** Modelo de reserva quando o principal cai por sobrecarga/timeout (config_ia.modelo_reserva). */
+    modeloReserva?: string | null
   },
   supabase?: SupaAdmin
 ): Promise<string> {
   const db = supabase ?? createServerAdminClient()
   const { provedor, apiKey, baseUrl } = await resolverCredencial(agente, db, params.credencialId)
+
+  // Só o Gemini tem o teto apertado do tier grátis; os outros provedores passam direto.
+  // Cada tentativa (inclusive a repetição após 429) reserva a própria vaga.
+  const reservar = async (model: string) => {
+    if (provedor === 'gemini') {
+      await aguardarVagaIA(db, chaveRpm(provedor, model), params.prioridade ?? 'normal', params.origem ?? agente)
+    }
+  }
 
   if (provedor === 'anthropic') {
     const anthropic = new Anthropic({ apiKey })
@@ -138,14 +167,39 @@ export async function chamarModeloIA(
   }
 
   // OpenAI-compatível (openai, gemini-via-google, openrouter, deepseek, requesty, custom)
-  const client = new OpenAI({ apiKey, baseURL: baseUrl })
-  const resp = await comRetry(() => client.chat.completions.create({
-    model: params.model,
-    max_tokens: params.maxTokens,
-    ...(params.jsonMode && SUPORTA_JSON.has(provedor) ? { response_format: { type: 'json_object' as const } } : {}),
-    messages: params.messages,
-  }))
-  const out = resp.choices[0]?.message?.content ?? ''
+  // maxRetries 0: o SDK repetiria por conta própria (2x) chamadas que a fila não conta;
+  // quem repete é o comRetry, com o backoff certo para 429.
+  // timeout 25s: o Gemini grátis, sob "high demand", às vezes não responde nem com erro
+  // (testado 07/11: 30–45s pendurado no 3.8 Flash) — sem teto, o turno some no silêncio.
+  const client = new OpenAI({ apiKey, baseURL: baseUrl, maxRetries: 0, timeout: 25_000 })
+  const gerar = (model: string, tentativas: number) =>
+    comRetry(async () => {
+      await reservar(model)
+      return client.chat.completions.create({
+        model,
+        max_tokens: params.maxTokens,
+        ...(params.jsonMode && SUPORTA_JSON.has(provedor) ? { response_format: { type: 'json_object' as const } } : {}),
+        messages: params.messages,
+      })
+    }, tentativas)
+
+  // Modelo reserva: o principal tenta UMA vez; se cair por sobrecarga/timeout/429, a
+  // mesma resposta sai pelo reserva (com os retries normais). A família não espera o
+  // Google desafogar — no pior caso recebe a resposta do modelo mais leve.
+  const reserva = params.modeloReserva?.trim()
+  let resp: Awaited<ReturnType<typeof gerar>>
+  if (reserva && reserva !== params.model) {
+    try {
+      resp = await gerar(params.model, 1)
+    } catch (e) {
+      if (!ehErroTransiente(e)) throw e
+      console.warn(`[ia] ${params.model} indisponível (${e instanceof Error ? e.message.slice(0, 120) : e}); usando reserva ${reserva}`)
+      resp = await gerar(reserva, 3)
+    }
+  } else {
+    resp = await gerar(params.model, 3)
+  }
+  const out =resp.choices[0]?.message?.content ?? ''
   return params.jsonMode ? extrairJson(out) : out
 }
 

@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
     .limit(10)
 
   // Gera a mensagem da Sara e checa a janela — SEM enviar.
-  const sara = await gerarRespostaSara(lead_id, undefined, undefined, prompt)
+  const sara = await gerarRespostaSara(lead_id, undefined, undefined, prompt, null, { prioridade: 'normal', origem: 'followup-preview' })
   const texto = sara.resposta ?? ''
   // Janela de 24h só vale se a saída real for a Cloud (mesma regra do cron).
   const canal = await canalDeSaida(tel, fam?.whatsapp_phone_number_id)

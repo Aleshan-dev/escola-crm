@@ -183,10 +183,17 @@ async function interpretarComGemini(
   models: string[],
   tipo: 'audio' | 'imagem' | 'documento',
   base64: string,
-  mime: string
+  mime: string,
+  db?: any
 ): Promise<string | null> {
   for (const model of models) {
     for (let tentativa = 0; tentativa < 2; tentativa++) {
+      // Mídia da família é parte do turno de conversa: prioridade alta na fila de RPM
+      // (o modelo de mídia divide a cota por minuto com a Sara quando é o mesmo).
+      if (db) {
+        const { aguardarVagaIA, chaveRpm } = await import('@/lib/ia-rpm')
+        await aguardarVagaIA(db, chaveRpm('gemini', model), 'alta', 'midia')
+      }
       const { texto, transiente } = await chamarGemini(apiKey, model, tipo, base64, mime)
       if (texto) return texto
       if (!transiente) break // erro definitivo p/ este modelo → próximo da lista
@@ -302,7 +309,7 @@ export async function interpretarMidia(
         tentouModelo = true
         const models = await modelosMidiaGemini(supabase)
         const tg = ehAudio ? 'audio' : ehImagem ? 'imagem' : 'documento'
-        bruto = await interpretarComGemini(cred.apiKey, models, tg, base64, mime)
+        bruto = await interpretarComGemini(cred.apiKey, models, tg, base64, mime, supabase)
       }
     } catch (e) {
       console.error('[midia] gemini indisponível:', e)

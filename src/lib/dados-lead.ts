@@ -93,6 +93,16 @@ function texto(v: unknown): string | null {
   return t ? t : null
 }
 
+/**
+ * Um nome de pessoa precisa ter ao menos uma LETRA. Nome de perfil do WhatsApp
+ * costuma vir como emoji puro ("🌸", "🥰") ou só símbolos — isso NÃO é nome e
+ * não deve virar nome_responsavel. "Família" tem letras, então é tratado como
+ * placeholder à parte por quem chama.
+ */
+export function nomePessoaValido(v: unknown): v is string {
+  return typeof v === 'string' && /\p{L}/u.test(v)
+}
+
 export type CriancaNormalizada = {
   nome?: string
   idade?: number
@@ -136,6 +146,24 @@ export function normalizarFamilia(fd: SaraFamiliaDados | null | undefined): Reco
   return out
 }
 
+/**
+ * Anti-alucinação do nome da criança. O modelo leve (gemini flash-lite) às vezes
+ * INVENTA um nome quando a família não deu nenhum — no incidente Kauanr (2026-11-04)
+ * cuspiu "Kianu" garblando o push "Kauanr E Rondi", e com sobrescrever=true isso ia
+ * parar na ficha. Regra: o nome só vale se a família o escreveu em alguma mensagem.
+ * Casa pelo nome inteiro OU por qualquer token "de gente" (>=3 letras) — cobre
+ * "Ana Catarina e Guilherme" (gêmeos) sem exigir a string exata.
+ */
+export function nomeFoiDitoPelaFamilia(nome: string, mensagensFamilia: (string | null)[]): boolean {
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const alvo = norm(nome).trim()
+  if (!alvo) return false
+  const corpus = norm(mensagensFamilia.filter(Boolean).join(' \u0001 '))
+  if (!corpus.trim()) return false
+  if (corpus.includes(alvo)) return true
+  return alvo.split(/\s+/).some((tok) => tok.length >= 3 && new RegExp(`\\b${tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(corpus))
+}
+
 /** Mantém só os campos que estão vazios no registro atual (não pisa em dado já gravado). */
 function soVazios<T extends Record<string, unknown>>(novo: T, atual: Record<string, unknown> | null | undefined): Partial<T> {
   if (!atual) return novo
@@ -175,6 +203,23 @@ export async function salvarDadosLead(
 
   let cri: CriancaNormalizada = normalizarCrianca(args.criancaDados)
   let criancaId = args.criancaId
+
+  // Nome de criança que a família NUNCA escreveu não entra na ficha (ver
+  // nomeFoiDitoPelaFamilia). Vale para o turno da Sara (sobrescrever=true) e para o
+  // backfill — os dois passam por aqui. Sem nome válido, o insert cai em 'A confirmar'.
+  if (cri.nome && cri.nome !== 'A confirmar') {
+    const { data: msgsIn } = await supabase
+      .from('mensagens')
+      .select('conteudo')
+      .eq('lead_id', args.leadId)
+      .eq('direcao', 'in')
+      .limit(100)
+    if (!nomeFoiDitoPelaFamilia(cri.nome, (msgsIn || []).map((m) => m.conteudo as string | null))) {
+      console.warn('[dados-lead] nome de criança descartado (não dito pela família)', args.leadId, cri.nome)
+      delete cri.nome
+    }
+  }
+
   if (Object.keys(cri).length === 0) return { criancaId, alterados }
 
   if (criancaId) {
@@ -231,7 +276,7 @@ export async function extrairDadosDaConversa(
   const [{ data: msgs }, { data: config }, { data: series }, { data: turnos }] = await Promise.all([
     supabase.from('mensagens').select('direcao, conteudo, criado_em').eq('lead_id', leadId)
       .order('criado_em', { ascending: false }).limit(60),
-    supabase.from('config_ia').select('modelo').eq('id', 1).maybeSingle(),
+    supabase.from('config_ia').select('modelo, modelo_auxiliar').eq('id', 1).maybeSingle(),
     supabase.from('series').select('nome, faixa_etaria').eq('ativa', true).order('ordem'),
     supabase.from('turnos').select('nome').eq('ativo', true).order('ordem'),
   ])
@@ -262,9 +307,12 @@ Responda SOMENTE JSON: {"familia_dados":{"nome_responsavel":null,"email":null},"
           { role: 'system', content: sistema },
           { role: 'user', content: conversa },
         ],
-        model: config?.modelo?.trim() || 'gpt-4o',
+        // Tarefa de fundo: modelo auxiliar (cota por minuto separada da conversa) e prioridade baixa.
+        model: config?.modelo_auxiliar?.trim() || config?.modelo?.trim() || 'gpt-4o',
         maxTokens: 400,
         jsonMode: true,
+        prioridade: 'baixa',
+        origem: 'ficha',
       },
       supabase
     )
@@ -283,12 +331,14 @@ Responda SOMENTE JSON: {"familia_dados":{"nome_responsavel":null,"email":null},"
 export async function completarDadosLead(supabase: SupaAdmin, leadId: string): Promise<string[]> {
   const { data: lead } = await supabase
     .from('leads')
-    .select('id, familia_id, crianca_id, crianca:criancas(*)')
+    .select('id, familia_id, crianca_id, crianca:criancas(*), familia:familias(nome_responsavel)')
     .eq('id', leadId)
     .maybeSingle()
   if (!lead?.familia_id) return []
   const crianca = (Array.isArray(lead.crianca) ? lead.crianca[0] : lead.crianca) as Record<string, unknown> | null
-  if (!faltaAlgo(crianca)) return []
+  const familia = (Array.isArray(lead.familia) ? lead.familia[0] : lead.familia) as { nome_responsavel?: string | null } | null
+  const nomeAtualInvalido = !nomePessoaValido(familia?.nome_responsavel)
+  if (!faltaAlgo(crianca) && !nomeAtualInvalido) return []
 
   const ext = await extrairDadosDaConversa(supabase, leadId)
   if (!ext.familia_dados && !ext.crianca_dados) return []
@@ -301,5 +351,16 @@ export async function completarDadosLead(supabase: SupaAdmin, leadId: string): P
     criancaDados: ext.crianca_dados,
     sobrescrever: false,
   })
+
+  // Se o nome gravado é inválido (emoji puro do perfil do WhatsApp) e a família
+  // se apresentou na conversa, o extrator pega o nome real. soVazios não cobre
+  // isso (emoji não é "vazio"), então gravamos direto.
+  if (nomeAtualInvalido && nomePessoaValido(ext.familia_dados?.nome_responsavel)) {
+    const { error } = await supabase
+      .from('familias')
+      .update({ nome_responsavel: ext.familia_dados!.nome_responsavel })
+      .eq('id', lead.familia_id)
+    if (!error) alterados.push('familia.nome_responsavel')
+  }
   return alterados
 }

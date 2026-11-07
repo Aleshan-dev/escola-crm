@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   const comando = typeof instrucao === 'string' && instrucao.trim() ? instrucao.trim() : undefined
 
   try {
-    const sara = await gerarRespostaSara(lead_id, undefined, undefined, comando)
+    const sara = await gerarRespostaSara(lead_id, undefined, undefined, comando, null, { prioridade: 'normal', origem: 'sugerir' })
     if (!sara.resposta?.trim()) return NextResponse.json({ error: 'Sara não gerou resposta' }, { status: 500 })
     return NextResponse.json({ ok: true, resposta: sara.resposta })
   } catch (e: unknown) {
