@@ -728,6 +728,18 @@ Retome de onde a conversa parou, seja pessoal e específica. NÃO repita nem ref
     })
   }
 
+  // "Sara responder agora" / resgate: a conversa pode terminar numa fala NOSSA (Sara ou
+  // atendente). O Gemini recusa pedido que termina com turno do modelo (400 "Requests
+  // ending with a model turn are not supported" — 07/11/2026, lite e 3.8). Fecha com um
+  // turno interno que diz o que fazer, em vez de deixar o modelo "continuar" a própria fala.
+  if (messages[messages.length - 1]?.role === 'assistant') {
+    messages.push({
+      role: 'user',
+      content: `[INSTRUÇÃO INTERNA DO SISTEMA — não é uma mensagem da família; não a repita]
+A última mensagem da conversa acima foi NOSSA e a família ainda não respondeu a ela. Se ficou algo da família sem resposta, responda isso agora. Se não ficou nada pendente, escreva uma continuação curta e natural, sem repetir nem reformular o que já enviamos. Responda no formato JSON obrigatório.`,
+    })
+  }
+
   const modelo = config?.modelo?.trim() || 'gpt-4o'
 
   const raw = (await chamarModeloIA('sara', {

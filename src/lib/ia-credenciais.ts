@@ -102,6 +102,19 @@ async function comRetry<T>(fn: () => Promise<T>, tentativas = 3): Promise<T> {
   throw ultimo
 }
 
+/**
+ * O Gemini recusa pedido cujo último turno é do modelo (400 "Requests ending with a
+ * model turn are not supported"). Se a conversa termina em 'assistant', fecha com um
+ * turno de usuário neutro. Não mexe quando já termina em 'user'.
+ */
+export function garantirTurnoFinalUsuario(messages: Mensagem[]): Mensagem[] {
+  if (messages[messages.length - 1]?.role !== 'assistant') return messages
+  return [
+    ...messages,
+    { role: 'user', content: '[INSTRUÇÃO INTERNA DO SISTEMA] Continue a partir da conversa acima, sem repetir o que já foi dito, no formato pedido.' },
+  ]
+}
+
 /** Extrai um objeto JSON de um texto (remove cercas ```json e preâmbulos). */
 export function extrairJson(texto: string): string {
   let t = texto.trim()
@@ -179,7 +192,7 @@ export async function chamarModeloIA(
         model,
         max_tokens: params.maxTokens,
         ...(params.jsonMode && SUPORTA_JSON.has(provedor) ? { response_format: { type: 'json_object' as const } } : {}),
-        messages: params.messages,
+        messages: provedor === 'gemini' ? garantirTurnoFinalUsuario(params.messages) : params.messages,
       })
     }, tentativas)
 
