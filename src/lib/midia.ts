@@ -97,7 +97,10 @@ export async function salvarMidiaStorage(
 // 05/11/2026: gemini-2.5-flash e gemini-2.0-flash foram APOSENTADOS pelo Google
 // (404 "no longer available … use gemini-3.8-flash"); cadeia atualizada para os
 // GA vigentes. O alias '-latest' fica no fim (dá 503 em picos de demanda).
-const MODELOS_MIDIA_PADRAO = ['gemini-3.8-flash', 'gemini-flash-latest']
+// 07/11/2026: lite na frente (pedido do gestor) — a conversa foi para o 3.8 Flash
+// grátis, e a mídia no mesmo modelo dividiria a cota por minuto com a Sara. O 3.8 e o
+// '-latest' ficam só de reserva, se o lite falhar.
+const MODELOS_MIDIA_PADRAO = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest']
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 function limparMime(mimetype: string): string {

@@ -31,7 +31,10 @@ export type Classificacao =
   | { ok: true; intencao: string | null; confianca: number } // intencao null = 'none'
   | { ok: false; erro: string }
 
-export const MODELO_PADRAO = 'gpt-4o-mini'
+// Credencial padrão do roteador é a da Sara (Gemini): o padrão precisa ser um modelo
+// Gemini, senão o classificador ligado sem modelo configurado falha. Lite: tarefa curta,
+// cota por minuto separada da conversa (3.8 Flash).
+export const MODELO_PADRAO = 'gemini-3.5-flash-lite'
 
 /** Monta as mensagens do classificador. O histórico serve só para desambiguar ("sim", "a primeira"). */
 export function montarPromptClassificador(
