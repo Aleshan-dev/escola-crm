@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizarCrianca, normalizarData, normalizarIdade } from './dados-lead'
+import { nomeFoiDitoPelaFamilia, normalizarCrianca, normalizarData, normalizarIdade } from './dados-lead'
 
 describe('normalizarIdade', () => {
   it('aceita número', () => expect(normalizarIdade(3)).toEqual({ idade: 3, idade_meses: null }))
@@ -28,4 +28,16 @@ describe('normalizarCrianca', () => {
     expect(
       normalizarCrianca({ nome: ' Ely Davi ', idade: '2 anos', periodo: 'Integral', motivo_busca: '', data_nascimento: 'ontem' })
     ).toEqual({ nome: 'Ely Davi', idade: 2, periodo: 'Integral' }))
+})
+
+describe('nomeFoiDitoPelaFamilia', () => {
+  it('aceita nome dito pela família', () =>
+    expect(nomeFoiDitoPelaFamilia('Miguel', ['Miguel, em fevereiro/27 completará 2 anos.'])).toBe(true))
+  it('aceita um dos gêmeos', () =>
+    expect(nomeFoiDitoPelaFamilia('Ana Catarina e Guilherme', ['Ana Catarina e Guilherme'])).toBe(true))
+  it('ignora acento e caixa', () =>
+    expect(nomeFoiDitoPelaFamilia('Théo', ['oi, o theo tem 3 anos'])).toBe(true))
+  it('rejeita nome alucinado (caso Kianu/Kauanr)', () =>
+    expect(nomeFoiDitoPelaFamilia('Kianu', ['3 anos', 'Está quanto a matrícula', '?'])).toBe(false))
+  it('sem mensagens da família = rejeita', () => expect(nomeFoiDitoPelaFamilia('Kianu', [])).toBe(false))
 })

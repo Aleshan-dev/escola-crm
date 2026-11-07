@@ -26,7 +26,13 @@ function mergeMsgs(prev: Mensagem[], incoming: Mensagem[]): Mensagem[] {
   const reais = arr.filter((m) => !String(m.id).startsWith('temp-'))
   return arr
     .filter((m) => !String(m.id).startsWith('temp-') || !reais.some((r) => r.direcao === m.direcao && r.conteudo === m.conteudo))
-    .sort((a, b) => (a.criado_em < b.criado_em ? -1 : 1))
+    // Ordenação DETERMINÍSTICA: horário e, em empate (balões no mesmo segundo),
+    // desempata pelo id. Sem o desempate, o sort era instável e reordenava a
+    // cada poll de 5s, trocando a referência do array e puxando a rolagem.
+    .sort((a, b) => {
+      if (a.criado_em !== b.criado_em) return a.criado_em < b.criado_em ? -1 : 1
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    })
 }
 
 export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }) {
@@ -39,6 +45,11 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
   const [showInstruir, setShowInstruir] = useState(false)
   const [gerando, setGerando] = useState(false)
   const msgsRef = useRef<HTMLDivElement>(null)
+  // Auto-scroll só "segue" o fim se o usuário já estiver no fim. Assim, ao rolar
+  // pra cima pra ler mensagens antigas, o poll/realtime não arrasta a tela de
+  // volta pra mensagem mais recente. primeiraCargaRef garante abrir no fim.
+  const nearBottomRef = useRef(true)
+  const primeiraCargaRef = useRef(true)
 
   async function loadMensagens() {
     const { data } = await supabase
@@ -46,7 +57,15 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
       .select('*')
       .eq('lead_id', lead.id)
       .order('criado_em')
-    if (data) setMensagens((prev) => mergeMsgs(prev, data as unknown as Mensagem[]))
+    if (data) setMensagens((prev) => {
+      const merged = mergeMsgs(prev, data as unknown as Mensagem[])
+      // Nada mudou (mesmo id/status/conteúdo, mesma ordem): devolve o array
+      // anterior pra NÃO re-renderizar nem disparar o auto-scroll à toa no poll.
+      const igual =
+        merged.length === prev.length &&
+        merged.every((m, i) => m.id === prev[i].id && m.status === prev[i].status && m.conteudo === prev[i].conteudo)
+      return igual ? prev : merged
+    })
   }
 
   // Marca as recebidas como lidas (apaga o badge "nova" no funil).
@@ -61,6 +80,8 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
 
   useEffect(() => {
     setMensagens([]) // limpa a conversa anterior antes de carregar a nova
+    primeiraCargaRef.current = true // nova conversa: abrir no fim
+    nearBottomRef.current = true
     loadMensagens()
     marcarLidas()
 
@@ -93,8 +114,28 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id])
 
+  // Marca se o usuário está (ou não) no fim da conversa a cada rolagem manual.
+  function onMsgsScroll() {
+    const el = msgsRef.current
+    if (!el) return
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }
+
   useEffect(() => {
-    msgsRef.current?.scrollTo({ top: msgsRef.current.scrollHeight, behavior: 'smooth' })
+    const el = msgsRef.current
+    if (!el) return
+    // Primeira carga da conversa: vai direto pro fim (sem animação).
+    if (primeiraCargaRef.current && mensagens.length > 0) {
+      primeiraCargaRef.current = false
+      el.scrollTop = el.scrollHeight
+      nearBottomRef.current = true
+      return
+    }
+    // Depois disso, só acompanha o fim se o usuário já estava no fim. Se ele
+    // rolou pra cima pra ler o histórico, não arrasta a tela de volta.
+    if (nearBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    }
   }, [mensagens])
 
   async function toggleIA(on: boolean) {
@@ -177,7 +218,7 @@ export function ChatPopup({ lead, onClose }: { lead: Lead; onClose: () => void }
         </button>
       </div>
 
-      <div ref={msgsRef} className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3">
+      <div ref={msgsRef} onScroll={onMsgsScroll} className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3">
         {mensagens.map((m, i) => {
           const isIn = m.direcao === 'in'
           const isIA = m.direcao === 'out_ia'

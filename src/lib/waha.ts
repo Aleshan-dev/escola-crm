@@ -274,6 +274,22 @@ async function post(cfg: WahaConfig, path: string, body: Record<string, unknown>
   return r.json()
 }
 
+// Registra, de forma síncrona e best-effort, o wid que ACABAMOS de enviar. É a
+// fonte autoritativa para o webhook saber que um fromMe é eco NOSSO (e não um
+// humano digitando no celular): ver registrarMensagemManual. Gravado ANTES de o
+// chamador seguir, então já está no banco quando o eco chega. Falha aqui não pode
+// quebrar o envio — no pior caso o webhook cai no dedupe por wid/23505 de sempre.
+async function registrarWidEnviado(wid: string | null, telefone: string): Promise<void> {
+  if (!wid) return
+  try {
+    const { createServerAdminClient } = await import('@/lib/supabase-server')
+    const supabase = createServerAdminClient()
+    await supabase.from('wid_enviado').upsert({ wid, telefone }, { onConflict: 'wid' })
+  } catch (e) {
+    console.error('registrarWidEnviado falhou (seguindo mesmo assim):', e)
+  }
+}
+
 // Envio de texto. Devolve `{ key: { id } }` (forma do Evolution).
 export async function wahaSendText(numero: string, texto: string): Promise<{ key: { id: string | null } }> {
   const cfg = await getWahaConfig()
@@ -282,7 +298,9 @@ export async function wahaSendText(numero: string, texto: string): Promise<{ key
     chatId: await resolverChatId(numero),
     text: texto,
   })
-  return { key: { id: extrairId(j) } }
+  const wid = extrairId(j)
+  await registrarWidEnviado(wid, numero)
+  return { key: { id: wid } }
 }
 
 // Envio de mídia por URL (o WAHA baixa e envia — igual ao Evolution, que também
@@ -304,7 +322,9 @@ export async function wahaSendMedia(
     },
     ...(opts.caption ? { caption: opts.caption } : {}),
   })
-  return { key: { id: extrairId(j) } }
+  const wid = extrairId(j)
+  await registrarWidEnviado(wid, numero)
+  return { key: { id: wid } }
 }
 
 // Estado da sessão, normalizado para a MESMA forma do Evolution (`{ state }`

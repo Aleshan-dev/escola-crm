@@ -16,6 +16,8 @@ import {
   promptPosVisitaPorToque,
   POS_VISITA_TOQUES_HORAS,
   POS_VISITA_MAX_TOQUES,
+  estaDormente,
+  reativacaoDevida,
   type TriggerNome,
 } from './followup-regras'
 
@@ -139,6 +141,7 @@ describe('promptPorTrigger', () => {
     'followup_pos_visita',
     'recuperacao',
     'reengajamento',
+    'reengajamento_agendado',
     'lembrete_dia',
     'resgate_no_show',
   ]
@@ -254,5 +257,47 @@ describe('promptPosVisitaPorToque', () => {
   })
   it('índice acima do previsto cai no fechamento gentil (D14)', () => {
     expect(promptPosVisitaPorToque('Larissa', 9)).toContain('está tudo bem')
+  })
+})
+
+// REENGAJAMENTO AGENDADO (Repescagem) — lead dormente até a data combinada com a família.
+describe('estaDormente / reativacaoDevida', () => {
+  const agora = Date.now()
+  it('está dormente enquanto a data de reativação é futura', () => {
+    expect(estaDormente(agora + 10 * H, agora)).toBe(true)
+    expect(estaDormente(agora - 1 * H, agora)).toBe(false)
+    expect(estaDormente(0, agora)).toBe(false) // sem data = não dormente
+  })
+  it('a reativação vence quando a data combinada chega', () => {
+    expect(reativacaoDevida(agora - 1 * H, agora)).toBe(true)
+    expect(reativacaoDevida(agora, agora)).toBe(true) // no limite
+    expect(reativacaoDevida(agora + 1 * H, agora)).toBe(false) // ainda futura
+    expect(reativacaoDevida(0, agora)).toBe(false) // sem data
+  })
+  it('dormente e devido são mutuamente exclusivos quando há data', () => {
+    const futura = agora + 5 * H
+    const passada = agora - 5 * H
+    expect(estaDormente(futura, agora) && reativacaoDevida(futura, agora)).toBe(false)
+    expect(estaDormente(passada, agora) || reativacaoDevida(passada, agora)).toBe(true)
+  })
+})
+
+describe('promptPorTrigger — reengajamento_agendado', () => {
+  it('honra o combinado: caloroso, sem cobrar decisão nem empurrar visita', () => {
+    const texto = promptPorTrigger('reengajamento_agendado', 'Larissa', 1)
+    expect(texto).toContain('Larissa')
+    expect(texto).toContain('combinou')
+    expect(texto).toContain('NÃO cobre decisão')
+    expect(texto).toContain('NÃO empurre visita')
+    expect(texto).toContain('NUNCA invente escassez')
+  })
+  it('cita o prazo/contexto que a família deu, quando fornecido', () => {
+    const motivo = 'decidir em fevereiro, quando definir o trabalho'
+    const texto = promptPorTrigger('reengajamento_agendado', 'Larissa', 1, motivo)
+    expect(texto).toContain(motivo)
+  })
+  it('sem motivo, não injeta aspas vazias nem gancho', () => {
+    const texto = promptPorTrigger('reengajamento_agendado', 'Larissa', 1, null)
+    expect(texto).not.toContain('tinha dito o seguinte')
   })
 })

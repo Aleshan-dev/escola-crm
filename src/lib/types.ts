@@ -32,6 +32,9 @@ export type Lead = {
   // Sara reativa (ela ainda responde se a família voltar). Null = follow-up normal.
   followup_encerrado_em?: string | null
   followup_encerrado_motivo?: string | null
+  // Reengajamento agendado (Repescagem): data futura em que a Sara retoma o lead dormente.
+  reativar_em?: string | null
+  reativar_motivo?: string | null
   // Sara sugere encerrar (o gestor confirma no botão) — nunca silencia sozinha.
   sugestao_encerramento?: boolean
   sugestao_encerramento_em?: string | null

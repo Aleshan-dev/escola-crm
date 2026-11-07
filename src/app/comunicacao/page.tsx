@@ -7,7 +7,7 @@ import { FunilMatriculados } from '@/components/FunilMatriculados'
 // O acesso principal é pelo seletor de funil na tela /kanban.
 export default function ComunicacaoPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="h-screen flex flex-col overflow-hidden bg-slate-50">
       <Topbar />
       <div className="px-4 py-3 border-b border-slate-200 bg-white">
         <h1 className="text-lg font-semibold">Matriculados por turma</h1>

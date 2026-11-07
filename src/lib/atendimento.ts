@@ -1,8 +1,9 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { gerarRespostaSara, SaraColuna } from '@/lib/sara'
-import { completarDadosLead, salvarDadosLead } from '@/lib/dados-lead'
+import { completarDadosLead, salvarDadosLead, nomePessoaValido } from '@/lib/dados-lead'
 import { notificarGestor } from '@/lib/notificacoes'
-import { labelAcre, dentroDaJanelaVisita, ACRE_SHIFT_MS } from '@/lib/disponibilidade'
+import { labelAcre, dentroDaJanelaVisita, ACRE_SHIFT_MS, acreWallToUtc } from '@/lib/disponibilidade'
+import { assinar } from '@/lib/assinatura'
 import { sleep } from '@/lib/pacing'
 import { identificarResponsavel } from '@/lib/sgei'
 import { processarMensagemSalomao } from '@/lib/salomao'
@@ -82,6 +83,25 @@ async function liberarTravaResposta(supabase: SupaAdmin, leadId: string): Promis
   await supabase.from('leads').update({ resposta_lock_em: null }).eq('id', leadId)
 }
 
+/**
+ * Fase 3 do handoff em voo: um humano ASSUMIU pelo celular desde `desde`?
+ * Com a atribuição por ledger (registrarMensagemManual), um `out_humano` só é gravado
+ * para uma resposta humana de verdade — então, antes de cada balão, se já apareceu um
+ * out_humano neste turno, a Sara PARA de enviar o resto (não fala por cima do atendente).
+ * Caso Cris Ferreira (03/11): o humano respondeu no aparelho ANTES do 1º balão da Sara.
+ */
+export async function humanoAssumiu(supabase: SupaAdmin, leadId: string, desde: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('mensagens')
+    .select('id')
+    .eq('lead_id', leadId)
+    .eq('direcao', 'out_humano')
+    .gt('criado_em', desde)
+    .limit(1)
+    .maybeSingle()
+  return data != null
+}
+
 /** Junta os balões recebidos ('in') desde a última resposta do sistema, para o
  * Salomão considerar a rajada inteira numa resposta só. Se não houver nada,
  * devolve o texto do balão atual (fallback). */
@@ -154,36 +174,48 @@ export async function registrarMensagemManual(
     .maybeSingle()
   if (!lead) return 'fromMe_sem_lead'
 
-  // Corrida do 1º balão: quando a Sara responde em vários balões, o eco fromMe de um
-  // balão pode chegar ANTES de o app gravar o out_ia dele — aí o dedupe por wid (acima)
-  // e o 23505 (abaixo) não pegam, o out_humano é inserido e a Sara se pausa sozinha
-  // ("atendente respondeu manualmente"). Enquanto a Sara está gerando/enviando a resposta
-  // deste lead, a trava `resposta_lock_em` está FRESCA (tomada em processarMensagemRecebida
-  // e só liberada no finally, cobrindo todo o laço de balões). Lock fresco ⇒ este fromMe é
-  // eco nosso: grava como out_ia (timeline limpa) e NÃO pausa.
-  const lockFresco = lead.resposta_lock_em != null
-    && Date.now() - new Date(lead.resposta_lock_em as string).getTime() < LOCK_TTL_MS
-
-  // Sinal INDEPENDENTE do caminho de envio: se há um out_ia nosso para este lead nos
-  // últimos segundos, uma resposta multi-balão está saindo e este fromMe é o eco de um
-  // balão — vale também para caminhos que NÃO seguram a trava (botão "responder agora",
-  // follow-up, Caso), onde só o lock não bastaria (foi assim que a Sara voltou a pausar
-  // no 2º balão de uma resposta manual).
-  let outIaRecente = false
-  if (!lockFresco) {
-    const limite = new Date(Date.now() - ECO_OUT_IA_JANELA_MS).toISOString()
-    const { data: ultimaOutIa } = await supabase
-      .from('mensagens')
-      .select('id')
-      .eq('lead_id', lead.id)
-      .eq('direcao', 'out_ia')
-      .gt('criado_em', limite)
-      .limit(1)
+  // ATRIBUIÇÃO AUTORITATIVA POR wid (ledger crm.wid_enviado): todo envio NOSSO pelo
+  // WAHA grava o wid no ledger ANTES de o chamador seguir (ver registrarWidEnviado em
+  // src/lib/waha.ts), então o wid já está no banco quando o eco chega. Logo:
+  //   wid NO ledger        ⇒ eco da própria Sara (ou equipe respondendo pelo app) → out_ia, NÃO pausa.
+  //   wid AUSENTE do ledger ⇒ mensagem DIGITADA NO CELULAR por um humano → out_humano + PAUSA,
+  //                           mesmo com o lock fresco.
+  // Isto SUBSTITUI o antigo palpite "lock fresco ⇒ Sara", que rotulava como Sara uma
+  // resposta manual feita no aparelho enquanto a Sara gerava a dela — a IA seguia falando
+  // por cima e a timeline mentia (caso Cris Ferreira, 03/11). O risco assimétrico (rotular
+  // eco da Sara como humano = ela se cala em TODO lead) fica coberto porque o ledger é
+  // escrito no ponto único de envio (Sara-conversa, botão "responder agora", follow-up,
+  // Casos, resgate). O dedupe por wid (acima) e o 23505 (abaixo) seguem como rede de segurança.
+  let nossoEnvio = false
+  if (wid) {
+    const { data: doLedger } = await supabase
+      .from('wid_enviado')
+      .select('wid')
+      .eq('wid', wid)
       .maybeSingle()
-    outIaRecente = ultimaOutIa != null
+    nossoEnvio = doLedger != null
+  } else {
+    // Edge sem wid: não dá para casar no ledger. Mantém o sinal antigo de lock/recência,
+    // conservador para NUNCA calar a Sara no próprio eco.
+    const lockFresco = lead.resposta_lock_em != null
+      && Date.now() - new Date(lead.resposta_lock_em as string).getTime() < LOCK_TTL_MS
+    let outIaRecente = false
+    if (!lockFresco) {
+      const limite = new Date(Date.now() - ECO_OUT_IA_JANELA_MS).toISOString()
+      const { data: ultimaOutIa } = await supabase
+        .from('mensagens')
+        .select('id')
+        .eq('lead_id', lead.id)
+        .eq('direcao', 'out_ia')
+        .gt('criado_em', limite)
+        .limit(1)
+        .maybeSingle()
+      outIaRecente = ultimaOutIa != null
+    }
+    nossoEnvio = lockFresco || outIaRecente
   }
 
-  if (lockFresco || outIaRecente) {
+  if (nossoEnvio) {
     await supabase.from('mensagens').insert({
       lead_id: lead.id,
       direcao: 'out_ia',
@@ -322,7 +354,10 @@ export async function processarMensagemRecebida(
     const ins = await supabase
       .from('familias')
       .insert({
-        nome_responsavel: pushName,
+        // Nome de perfil do WhatsApp às vezes é emoji puro ("🌸"); isso não é
+        // nome. Guarda o placeholder "Família" e deixa o backfill/extrator pôr
+        // o nome real depois. Ver nomePessoaValido em dados-lead.ts.
+        nome_responsavel: nomePessoaValido(pushName) ? pushName : 'Família',
         telefone,
         origem,
         canal: canal || 'organico',
@@ -739,6 +774,9 @@ export async function processarMensagemRecebida(
     // duplicata em rajada e a reentrega de webhook pela Meta. Quem perde, desiste.
     const travou = await tentarTravarResposta(supabase, lead.id)
     if (!travou) return lead.id
+    // Marca o início do turno: se um humano responder pelo celular daqui pra frente
+    // (out_humano via ledger), a Sara aborta os balões que ainda faltam enviar (Fase 3).
+    const turnoIniciadoEm = new Date().toISOString()
     try {
       // Uma execução anterior da mesma rajada já respondeu DEPOIS desta mensagem?
       // (ela venceu a corrida e a resposta dela, lida do histórico completo, já
@@ -778,11 +816,36 @@ export async function processarMensagemRecebida(
 
       const colunaAtual = todasColunas?.find((c) => c.id === lead!.coluna_id) as SaraColuna | undefined
 
+      // A Sara SEMPRE responde ao contexto MAIS RECENTE. A chamada ao modelo leva
+      // alguns segundos; se a família mandar algo NOVO nesse intervalo, a resposta
+      // recém-gerada já nasceu velha (ignorando o que acabou de ser dito) — foi a
+      // essência do "respondeu sem ler o contexto" do caso Cris. Como gerarRespostaSara
+      // relê o histórico a cada chamada, basta regerar quando aparece um 'in' novo
+      // depois do início da geração. Limite de 2 regerações: se a família seguir
+      // digitando sem parar, o debounce de 15s da PRÓXIMA execução cobre o resto.
+      let antesDaGeracao = new Date().toISOString()
       let saraResult = await gerarRespostaSara(
         lead.id,
         todasColunas as SaraColuna[] | undefined,
         colunaAtual
       )
+      for (let tentativa = 0; tentativa < 2; tentativa++) {
+        const { data: inboundNovo } = await supabase
+          .from('mensagens')
+          .select('id')
+          .eq('lead_id', lead.id)
+          .eq('direcao', 'in')
+          .gt('criado_em', antesDaGeracao)
+          .limit(1)
+          .maybeSingle()
+        if (!inboundNovo) break // nada novo chegou durante a geração: a resposta está atual
+        antesDaGeracao = new Date().toISOString()
+        saraResult = await gerarRespostaSara(
+          lead.id,
+          todasColunas as SaraColuna[] | undefined,
+          colunaAtual
+        )
+      }
 
       // GUARDA DE PROMESSA (Casos, modo 'ativo'): prometeu verificar/retornar sem
       // abrir Caso → regera UMA vez pedindo "abra o Caso ou reformule". Se insistir,
@@ -809,7 +872,10 @@ export async function processarMensagemRecebida(
       // Envia em balões curtos (uma mensagem por parágrafo), conforme o manual.
       const baloes = dividirEmBaloes(saraResult.resposta)
       for (let i = 0; i < baloes.length; i++) {
-        const sentId = await enviarValidado(telefone, baloes[i])
+        // Humano assumiu no celular durante o turno? Para de enviar (não fala por cima).
+        if (await humanoAssumiu(supabase, lead.id, turnoIniciadoEm)) break
+        // Assina só o que SAI ("Sara:" em cada balão); grava o texto limpo.
+        const sentId = await enviarValidado(telefone, assinar('Sara', baloes[i]))
         await supabase.from('mensagens').insert({
           lead_id: lead.id,
           direcao: 'out_ia',
@@ -867,6 +933,38 @@ export async function processarMensagemRecebida(
         }).eq('id', lead.id)
       }
 
+      // REENGAJAMENTO AGENDADO (Repescagem): a família quer decidir mais pra frente e a
+      // Sara combinou um mês/período para retomar. Grava a data em `reativar_em` — o lead
+      // fica DORMENTE no follow-up (sem cutucada) até lá, quando a Sara manda sozinha um
+      // toque de reengajamento (ver src/app/api/cron/followup). Só aceitamos data FUTURA
+      // (a Sara é instruída a confirmar o mês antes); data passada/inválida é ignorada.
+      const reeng = saraResult.reengajamento
+      if (reeng?.reativar_em && /^\d{4}-\d{2}-\d{2}$/.test(reeng.reativar_em)) {
+        const [ry, rm, rd] = reeng.reativar_em.split('-').map((n) => parseInt(n, 10))
+        // 08:00 na parede de Acre do dia combinado (o cron só envia 8h–20h Acre de todo
+        // jeito, então a hora exata é só para a data virar no dia certo, sem erro de fuso).
+        const reativarUtc = acreWallToUtc(ry, rm - 1, rd, 8, 0)
+        if (!isNaN(reativarUtc.getTime()) && reativarUtc.getTime() > Date.now()) {
+          await supabase
+            .from('leads')
+            .update({
+              reativar_em: reativarUtc.toISOString(),
+              reativar_motivo: reeng.motivo?.trim() || null,
+              // Reinicia o relógio da Repescagem: se o lead já tinha esgotado os toques
+              // antes de a família pedir prazo, sem isto o cron o re-esgotaria e o sweep
+              // o jogaria em "Perdidos" ignorando a data de reativação. Dormente = limpo.
+              followup_count: 0,
+              followup_status: 'ativo',
+            })
+            .eq('id', lead.id)
+          await supabase.from('eventos_timeline').insert({
+            lead_id: lead.id,
+            tipo: 'followup',
+            descricao: `Reengajamento agendado: a família quer decidir mais pra frente. A Sara retoma em ${labelAcre(reativarUtc)}${reeng.motivo?.trim() ? ` — ${reeng.motivo.trim()}` : ''}.`,
+          })
+        }
+      }
+
       // Dados da família e da criança extraídos pela Sara neste turno. Normaliza
       // os tipos antes de gravar (idade "2 anos" derrubava o insert inteiro) e,
       // se a ficha continuar com buraco, o extrator dedicado completa o que a
@@ -890,58 +988,87 @@ export async function processarMensagemRecebida(
       // tarefa/evento na agenda com um horário CONCRETO e FUTURO — a família escolheu
       // uma das opções oferecidas. Interesse vago ou pedido de prazo NÃO agenda.
       let temSlotVisita = false
+      // Parte 2 (dizer × fazer): a Sara afirmou no texto que agendou/reagendou?
+      // Depois do bloco, se afirmou mas NADA foi gravado, avisamos o gestor.
+      // Verbos que significam "eu marquei/mudei o horário" (NÃO inclui "confirmado para",
+      // que também é a confirmação de PRESENÇA de uma visita que já existe — evita falso
+      // positivo). Exige também um horário no texto.
+      const textoAfirmaAgendamento =
+        /\b(agend|reagend|remarc|marqu|deix\w*\s+(?:agendad|marcad)|ajust\w*\s+o?\s*hor[áa]rio)\w*/i.test(
+          saraResult.resposta || ''
+        ) && /\d{1,2}\s*[:h]\s*\d{0,2}/.test(saraResult.resposta || '')
+
       const av = saraResult.agendar_visita
       // RAIZ DO FUSO (2026-10-29): o instante vem do SLOT ofertado (servidor), não da
-      // hora que o modelo monta. `slot_id` é resolvido em `slots_ofertados` para o UTC
-      // exato de `calcularSlotsDisponiveis`. Só quando não há slot casado é que caímos
-      // no `data_hora` cru + o clamp antigo (rede de segurança). Isso elimina o bug em
-      // que a Sara carimbava a parede como UTC e a visita entrava 2–5h cedo mesmo
-      // DENTRO da grade (casos Cris Ferreira e Régis Albuquerque).
+      // hora que o modelo monta. Precedência de resolução:
+      //   1) slot_id   → `slots_ofertados` (UTC autoritativo de calcularSlotsDisponiveis);
+      //   2) hora_acre → HORA DE PAREDE de Acre via acreWallToUtc (Parte 3: reagendar p/ um
+      //      horário DENTRO DA GRADE que a família pediu, sem o bug de fuso); fora da grade
+      //      NÃO persiste (a Sara não devia ter confirmado — Parte 1/2 cuidam);
+      //   3) data_hora → ISO cru do modelo + clamp antigo (rede de segurança).
       const slotOfertado = av?.slot_id
         ? saraResult.slots_ofertados.find((s) => s.id === av.slot_id)
         : undefined
-      if (av && (slotOfertado || av.data_hora)) {
-        const dh = slotOfertado ? new Date(slotOfertado.data_hora) : new Date(av.data_hora as string)
-        if (!isNaN(dh.getTime()) && dh.getTime() > Date.now()) {
-          temSlotVisita = true
+      if (av && (slotOfertado || av.hora_acre || av.data_hora)) {
+        // Grade de visitas (dias/horários em que a escola recebe). Base da validação da
+        // Parte 3 e do aviso de "fora da grade".
+        const { data: gradeAtiva } = await supabase
+          .from('horarios_visita')
+          .select('dia_semana, hora_inicio, hora_fim')
+          .eq('ativo', true)
+        const grade = gradeAtiva && gradeAtiva.length > 0 ? gradeAtiva : null
 
-          // Grade de visitas (usada no fallback de fuso e no aviso de "fora da grade").
-          const { data: gradeAtiva } = await supabase
-            .from('horarios_visita')
-            .select('dia_semana, hora_inicio, hora_fim')
-            .eq('ativo', true)
-          const grade = gradeAtiva && gradeAtiva.length > 0 ? gradeAtiva : null
+        // REAGENDAMENTO (2026-09-16): se já existe uma visita futura não concluída,
+        // ATUALIZA o horário dela; só insere quando não há nenhuma. Buscada ANTES da
+        // resolução porque o reagendamento no mesmo dia por hora_acre usa a data dela.
+        const { data: visitaAberta } = await supabase
+          .from('tarefas')
+          .select('id, data_hora')
+          .eq('lead_id', lead.id)
+          .eq('tipo', 'visita')
+          .eq('concluida', false)
+          .gte('data_hora', new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString())
+          .order('data_hora', { ascending: true })
+          .limit(1)
+          .maybeSingle()
 
-          // Fallback sem slot casado (horário fora do ofertado). Correção de fuso
-          // (2026-10-27): a Sara às vezes carimba a HORA DE PAREDE como UTC — a visita
-          // entra 5h cedo (ex.: 08:00 Acre vira 08:00Z) e some da agenda; pior, o no-show
-          // passava a disparar na HORA da visita (caso Aline: resgate às 08:00 em ponto,
-          // com a família já no portão). Regra: respeitar SEMPRE o fuso do Google Agenda
-          // (America/Rio_Branco, UTC-5). Se o instante cai FORA da grade mas +5h cai
-          // DENTRO, é esse bug — reescrevemos para o instante real. Com slot casado o
-          // instante já é autoritativo, então pulamos o clamp.
-          let dhFinal = dh
-          if (!slotOfertado && grade && !dentroDaJanelaVisita(dh.toISOString(), grade)) {
-            const corrigido = new Date(dh.getTime() - ACRE_SHIFT_MS) // +5h: parede-em-UTC -> instante real
-            if (dentroDaJanelaVisita(corrigido.toISOString(), grade)) dhFinal = corrigido
+        // Resolve o instante alvo por precedência.
+        let dhFinal: Date | null = null
+        if (slotOfertado) {
+          dhFinal = new Date(slotOfertado.data_hora) // autoritativo, já dentro da grade
+        } else if (av.hora_acre && /^\d{1,2}:\d{2}$/.test(av.hora_acre)) {
+          // Parte 3: hora de parede de Acre. data_acre explícito, ou a data da visita já
+          // marcada (mudança no mesmo dia). acreWallToUtc elimina a ambiguidade de fuso.
+          const [hh, mi] = av.hora_acre.split(':').map((n) => parseInt(n, 10))
+          const dataAcreOk = av.data_acre && /^\d{4}-\d{2}-\d{2}$/.test(av.data_acre)
+          const baseIso = dataAcreOk
+            ? `${av.data_acre}T00:00:00Z`
+            : visitaAberta
+              ? new Date(new Date(visitaAberta.data_hora).getTime() + ACRE_SHIFT_MS).toISOString()
+              : null
+          if (baseIso) {
+            const base = new Date(baseIso) // lê a parede de Acre via getUTC*
+            const cand = acreWallToUtc(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), hh, mi)
+            // Só aceita DENTRO da grade. Fora dela não persiste: a Sara não devia ter
+            // confirmado (a Parte 2 avisa o gestor se ela afirmou mesmo assim).
+            if (!grade || dentroDaJanelaVisita(cand.toISOString(), grade)) dhFinal = cand
           }
+        } else if (av.data_hora) {
+          const dh = new Date(av.data_hora)
+          if (!isNaN(dh.getTime())) {
+            dhFinal = dh
+            // Clamp de fuso (2026-10-27): a Sara às vezes carimba a PAREDE como UTC — a
+            // visita entra 5h cedo. Se cai FORA da grade mas +5h cai DENTRO, corrige.
+            if (grade && !dentroDaJanelaVisita(dh.toISOString(), grade)) {
+              const corrigido = new Date(dh.getTime() - ACRE_SHIFT_MS)
+              if (dentroDaJanelaVisita(corrigido.toISOString(), grade)) dhFinal = corrigido
+            }
+          }
+        }
+
+        if (dhFinal && !isNaN(dhFinal.getTime()) && dhFinal.getTime() > Date.now()) {
+          temSlotVisita = true
           const dhIso = dhFinal.toISOString()
-
-          // REAGENDAMENTO (2026-09-16): antes o dedup era só por horário EXATO, então
-          // toda mudança de horário criava uma tarefa NOVA e deixava a antiga órfã
-          // (visita duplicada — caso da Bruna). Agora: se já existe uma visita futura
-          // não concluída, ATUALIZA o horário dela; só insere quando não há nenhuma.
-          const { data: visitaAberta } = await supabase
-            .from('tarefas')
-            .select('id, data_hora')
-            .eq('lead_id', lead.id)
-            .eq('tipo', 'visita')
-            .eq('concluida', false)
-            .gte('data_hora', new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString())
-            .order('data_hora', { ascending: true })
-            .limit(1)
-            .maybeSingle()
-
           const mesmoHorario = visitaAberta && new Date(visitaAberta.data_hora).getTime() === dhFinal.getTime()
 
           if (!mesmoHorario) {
@@ -1003,6 +1130,10 @@ export async function processarMensagemRecebida(
         }
       }
 
+      // Parte 2 (dizer × fazer): a visita foi REALMENTE gravada/atualizada NESTE turno?
+      // (capturado ANTES do fallback abaixo, que marca temSlotVisita por visita ANTIGA).
+      const visitaGravadaNoTurno = temSlotVisita
+
       // Se a Sara não agendou um slot neste turno, o lead ainda pode ir para
       // "Visita Agendada" caso JÁ exista uma tarefa de visita futura (ex.: visita
       // marcada manualmente pelo gestor, ou num turno anterior).
@@ -1017,6 +1148,20 @@ export async function processarMensagemRecebida(
           .limit(1)
           .maybeSingle()
         if (visitaFutura) temSlotVisita = true
+      }
+
+      // Parte 2 — REDE DE SEGURANÇA (dizer × fazer): a Sara disse à família que
+      // agendou/reagendou um horário, mas NADA foi gravado na agenda neste turno
+      // (ela não preencheu agendar_visita, ou o horário caiu fora da grade). Foi o que
+      // aconteceu com a Cris (03/11): "já agendei 15:30" sem nunca mexer na tarefa, e a
+      // família ficou sem resposta real até o dia seguinte. Avisa o gestor para marcar
+      // à mão. NÃO reescreve a fala (a família já recebeu) — só levanta a bandeira.
+      if (textoAfirmaAgendamento && !visitaGravadaNoTurno) {
+        await notificarGestor(
+          supabase,
+          'visita',
+          `⚠️ *Confira esta visita* — a Sara disse à família que agendou/reagendou um horário, mas NADA foi gravado na agenda.\nFamília: ${familia.nome_responsavel || 'Família'}\nProvável horário fora da grade ou mal-entendido. Confirme com a família e marque manualmente.`
+        ).catch((e) => console.error('[atendimento] alerta dizer×fazer falhou:', e))
       }
 
       // Guard-rails de movimentação

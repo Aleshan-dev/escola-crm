@@ -143,7 +143,7 @@ export default function KanbanPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       <Topbar />
 
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-slate-200 bg-white">
@@ -185,8 +185,8 @@ export default function KanbanPage() {
           </div>
         ) : (
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-            <div className="overflow-x-auto p-4">
-              <div className="flex gap-3 min-w-max">
+            <div className="scroll-x-always p-4 h-full">
+              <div className="flex gap-3 min-w-max h-full">
                 {colunasDoFunil.map((col) => (
                   <ColunaView
                     key={col.id}
@@ -254,7 +254,7 @@ function ColunaView({
   return (
     <div
       ref={setNodeRef}
-      className={`w-[260px] flex-shrink-0 bg-slate-100 rounded-xl p-2.5 transition ${
+      className={`w-[260px] flex-shrink-0 flex flex-col h-full max-h-full bg-slate-100 rounded-xl p-2.5 transition ${
         isOver ? 'bg-blue-50 ring-2 ring-blue-300' : ''
       }`}
     >
@@ -269,7 +269,7 @@ function ColunaView({
           {leads.length}
         </span>
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-0.5">
         {leads.map((lead) => (
           <CardLead key={lead.id} lead={lead} naoLida={naoLidas.has(lead.id)} onOpen={onOpen} onChat={onChat} />
         ))}
@@ -361,6 +361,19 @@ function CardLead({
             title="Leitura da Sara: pronto para visita"
           >
             ⭐ Pronto p/ visita
+          </span>
+        )}
+        {lead.reativar_em && new Date(lead.reativar_em).getTime() > Date.now() && (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 font-medium"
+            title={`Reengajamento agendado — a Sara retoma sozinha nesta data${lead.reativar_motivo ? `. Combinado: ${lead.reativar_motivo}` : ''}`}
+          >
+            💤 dormindo até{' '}
+            {new Date(lead.reativar_em).toLocaleDateString('pt-BR', {
+              day: '2-digit',
+              month: 'short',
+              timeZone: 'America/Rio_Branco',
+            })}
           </span>
         )}
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium inline-flex items-center gap-1 ${diasColor}`}>

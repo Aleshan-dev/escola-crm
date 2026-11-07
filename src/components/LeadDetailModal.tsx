@@ -57,6 +57,16 @@ export function LeadDetailModal({
   const [quandoIniciar, setQuandoIniciar] = useState<string>(L.quando_iniciar || '')
   const [cidade, setCidade] = useState<string>((lead.familia as any)?.cidade || '')
 
+  // Reengajamento agendado (Repescagem): data em que a Sara retoma o lead dormente.
+  // O valor vem como instante UTC; mostramos/editamos no fuso de Acre (AAAA-MM-DD).
+  const [reativarEm, setReativarEm] = useState<string>(
+    L.reativar_em ? new Date(L.reativar_em).toLocaleDateString('en-CA', { timeZone: 'America/Rio_Branco' }) : ''
+  )
+  const [reativarMotivo, setReativarMotivo] = useState<string>(L.reativar_motivo || '')
+  const [reativarErro, setReativarErro] = useState<string | null>(null)
+  const [reativarSalvo, setReativarSalvo] = useState<string | null>(L.reativar_em ?? null)
+  const [salvandoReativar, setSalvandoReativar] = useState(false)
+
   const [seriesList, setSeriesList] = useState<Serie[]>([])
   const [turnosList, setTurnosList] = useState<{ nome: string }[]>([])
   const [tarefas, setTarefas] = useState<Tarefa[]>([])
@@ -197,6 +207,51 @@ export function LeadDetailModal({
   }
   async function salvarCidade(v: string) {
     if (lead.familia_id) await supabase.from('familias').update({ cidade: v || null }).eq('id', lead.familia_id)
+  }
+  // Agenda (ou reagenda) o reengajamento: grava reativar_em às 08:00 de Acre do dia
+  // escolhido (= 13:00 UTC; Acre é UTC-5 sem horário de verão) e reinicia o relógio da
+  // Repescagem para o lead não ser varrido para "Perdidos" enquanto dorme. Mesma regra
+  // da Sara em atendimento.ts; o cron só envia 8h–20h Acre, então a hora é só o dia certo.
+  async function salvarReativacao() {
+    if (salvandoReativar) return
+    setReativarErro(null)
+    if (!reativarEm || !/^\d{4}-\d{2}-\d{2}$/.test(reativarEm)) {
+      setReativarErro('Escolha uma data.')
+      return
+    }
+    const iso = `${reativarEm}T13:00:00.000Z`
+    if (new Date(iso).getTime() <= Date.now()) {
+      setReativarErro('A data precisa ser futura.')
+      return
+    }
+    setSalvandoReativar(true)
+    try {
+      await supabase
+        .from('leads')
+        .update({
+          reativar_em: iso,
+          reativar_motivo: reativarMotivo.trim() || null,
+          followup_count: 0,
+          followup_status: 'ativo',
+        })
+        .eq('id', lead.id)
+      setReativarSalvo(iso)
+    } finally {
+      setSalvandoReativar(false)
+    }
+  }
+  async function limparReativacao() {
+    if (salvandoReativar) return
+    setSalvandoReativar(true)
+    setReativarErro(null)
+    try {
+      await supabase.from('leads').update({ reativar_em: null, reativar_motivo: null }).eq('id', lead.id)
+      setReativarEm('')
+      setReativarMotivo('')
+      setReativarSalvo(null)
+    } finally {
+      setSalvandoReativar(false)
+    }
   }
   async function carregarCriancas() {
     if (!lead.familia_id) return
@@ -420,6 +475,50 @@ export function LeadDetailModal({
               )}
             </div>
           )}
+
+          <div className="rounded-lg border border-sky-100 bg-sky-50/60 p-3">
+            <div className="mb-1 flex items-center gap-2 text-sm font-medium text-sky-900">
+              <Bell className="w-4 h-4" /> Reengajamento agendado
+            </div>
+            <p className="mb-2 text-[11px] text-sky-800/80">
+              Para quem quer decidir mais pra frente: o lead fica dormente (sem follow-up) até a data e a Sara retoma sozinha com um toque caloroso.
+              {reativarSalvo && new Date(reativarSalvo).getTime() > Date.now() && (
+                <> {' '}Hoje: 💤 dormindo até{' '}
+                  <strong>
+                    {new Date(reativarSalvo).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Rio_Branco' })}
+                  </strong>.
+                </>
+              )}
+            </p>
+            <div className="grid grid-cols-[auto_1fr] gap-2 items-center">
+              <input type="date" value={reativarEm} onChange={(e) => setReativarEm(e.target.value)} className={selCls} />
+              <input
+                value={reativarMotivo}
+                onChange={(e) => setReativarMotivo(e.target.value)}
+                placeholder="Motivo/combinado (ex: decidir em fevereiro)"
+                className={inputCls}
+              />
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={salvarReativacao}
+                disabled={salvandoReativar}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+              >
+                {reativarSalvo ? 'Atualizar data' : 'Agendar reengajamento'}
+              </button>
+              {reativarSalvo && (
+                <button
+                  onClick={limparReativacao}
+                  disabled={salvandoReativar}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+            {reativarErro && <p className="mt-1.5 text-xs text-red-600">{reativarErro}</p>}
+          </div>
 
           <div>
             <div className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"><CheckSquare className="w-4 h-4 text-slate-400" />Tarefas</div>

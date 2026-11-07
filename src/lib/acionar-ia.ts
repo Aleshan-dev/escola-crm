@@ -4,7 +4,8 @@ import type { EnviarTexto } from '@/lib/atendimento'
 import { protegerEnviarTexto } from '@/lib/envio/portao'
 import { ehErroJanela, alertarEnvioManual } from '@/lib/janela'
 import { gerarRespostaSara } from '@/lib/sara'
-import { dividirEmBaloes } from '@/lib/atendimento'
+import { dividirEmBaloes, humanoAssumiu } from '@/lib/atendimento'
+import { assinar } from '@/lib/assinatura'
 import { processarMensagemSalomao } from '@/lib/salomao'
 import { sleep } from '@/lib/pacing'
 import { aplicarMemoriaDoTurno } from '@/lib/memoria/servico'
@@ -47,7 +48,8 @@ export async function acionarIAParaLead(leadId: string): Promise<ResultadoAciona
   )
   enviarTexto.carimbo = conversa.carimbo
 
-  await supabase.from('leads').update({ resposta_lock_em: new Date().toISOString() }).eq('id', leadId)
+  const turnoIniciadoEm = new Date().toISOString()
+  await supabase.from('leads').update({ resposta_lock_em: turnoIniciadoEm }).eq('id', leadId)
   try {
     // ── Família matriculada + Salomão ativo → quem responde é o SALOMÃO ──────────
     const { data: cfg } = await supabase.from('config_ia').select('salomao_ativo').eq('id', 1).maybeSingle()
@@ -100,7 +102,10 @@ export async function acionarIAParaLead(leadId: string): Promise<ResultadoAciona
       const baloes = dividirEmBaloes(sara.resposta)
       try {
         for (let i = 0; i < baloes.length; i++) {
-          const wid = await enviarTexto(fam.telefone, baloes[i])
+          // Humano assumiu no celular durante o turno? Para de enviar (não fala por cima).
+          if (await humanoAssumiu(supabase, leadId, turnoIniciadoEm)) break
+          // Assina só o que SAI ("Sara:" em cada balão); grava o texto limpo.
+          const wid = await enviarTexto(fam.telefone, assinar('Sara', baloes[i]))
           await supabase.from('mensagens').insert({
             lead_id: leadId,
             direcao: 'out_ia',

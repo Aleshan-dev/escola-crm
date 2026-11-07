@@ -9,6 +9,7 @@ import {
 } from '@/lib/atendimento'
 import { extrairConteudoMidiaWaha } from '@/lib/midia'
 import { normalizarCelular } from '@/lib/telefone'
+import { nomePessoaValido } from '@/lib/dados-lead'
 import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere } from '@/lib/canais/webhook'
 import { lerConfigAnuncio, extrairReferralWaha, detectarOrigem } from '@/lib/atribuicao'
 
@@ -201,12 +202,20 @@ export async function POST(req: NextRequest) {
         await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
 
         // Corrige o nome de leads que ficaram como "Família" (criados antes de
-        // termos o nome do WhatsApp). Só sobrescreve o placeholder, nunca um nome real.
-        if (nome) {
-          await supabase.from('familias')
-            .update({ nome_responsavel: nome })
-            .eq('telefone_norm', normalizarCelular(telefone))
-            .or('nome_responsavel.is.null,nome_responsavel.eq.Família')
+        // termos o nome do WhatsApp) OU que gravaram um emoji puro como nome de
+        // perfil. Só sobrescreve placeholder/emoji, nunca um nome real, e só com
+        // um nome de contato válido (o resolvido também pode ser emoji).
+        if (nomePessoaValido(nome)) {
+          const telNorm = normalizarCelular(telefone)
+          const { data: fam } = await supabase.from('familias')
+            .select('id, nome_responsavel')
+            .eq('telefone_norm', telNorm)
+            .order('criado_em', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+          if (fam && (fam.nome_responsavel === 'Família' || !nomePessoaValido(fam.nome_responsavel))) {
+            await supabase.from('familias').update({ nome_responsavel: nome }).eq('id', fam.id)
+          }
         }
       } catch (e) {
         console.error('Webhook WAHA (after) erro:', e)

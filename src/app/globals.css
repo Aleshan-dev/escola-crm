@@ -9,3 +9,32 @@ html, body { height: 100%; }
 
 /* barra lateral fixa (w-16 = 4rem) */
 body { padding-left: 4rem; }
+
+/*
+ * Rolagem horizontal com a barra SEMPRE visível (Kanban/funis).
+ * overflow-x: scroll garante a barra mesmo quando o conteúdo quase cabe, e o
+ * estilo do ::-webkit-scrollbar troca a barra "overlay" (que some sozinha no
+ * Chrome/Windows) por uma barra clássica persistente.
+ */
+.scroll-x-always {
+  overflow-x: scroll;
+  overflow-y: hidden;
+  scrollbar-width: auto;               /* Firefox */
+  scrollbar-color: #94a3b8 #e2e8f0;    /* Firefox: thumb / trilho */
+}
+.scroll-x-always::-webkit-scrollbar {
+  height: 14px;
+  -webkit-appearance: none;
+}
+.scroll-x-always::-webkit-scrollbar-track {
+  background: #e2e8f0;
+  border-radius: 8px;
+}
+.scroll-x-always::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 8px;
+  border: 3px solid #e2e8f0;           /* "respiro" entre polegar e trilho */
+}
+.scroll-x-always::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}

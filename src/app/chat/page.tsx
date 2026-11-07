@@ -33,7 +33,14 @@ function mergeMsgs(prev: Mensagem[], incoming: Mensagem[]): Mensagem[] {
   const reais = arr.filter((m) => !String(m.id).startsWith('temp-'))
   return arr
     .filter((m) => !String(m.id).startsWith('temp-') || !reais.some((r) => r.direcao === m.direcao && r.conteudo === m.conteudo))
-    .sort((a, b) => (a.criado_em < b.criado_em ? -1 : 1))
+    // Ordenação DETERMINÍSTICA: por horário e, em empate (balões no mesmo
+    // segundo), desempata pelo id. Sem o desempate, o sort era instável e
+    // reordenava mensagens de mesmo horário a cada poll de 5s — isso trocava a
+    // referência do array, forçava re-render e puxava a rolagem pro fim.
+    .sort((a, b) => {
+      if (a.criado_em !== b.criado_em) return a.criado_em < b.criado_em ? -1 : 1
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    })
 }
 
 function ChatPageInner() {
@@ -55,6 +62,11 @@ function ChatPageInner() {
   const [enviandoMidia, setEnviandoMidia] = useState(false)
   const msgsRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  // Controle de auto-scroll: só "segue" o fim da conversa se o usuário já
+  // estiver no fim. Assim, ao rolar pra cima lendo mensagens antigas, o poll/
+  // realtime não arrasta a tela de volta pra mensagem mais recente.
+  const nearBottomRef = useRef(true)
+  const leadScrollRef = useRef<string | null>(null)
 
   async function loadLeads() {
     const { data } = await supabase
@@ -75,7 +87,15 @@ function ChatPageInner() {
       .select('*')
       .eq('lead_id', leadId)
       .order('criado_em')
-    if (data) setMensagens((prev) => mergeMsgs(prev, data as Mensagem[]))
+    if (data) setMensagens((prev) => {
+      const merged = mergeMsgs(prev, data as Mensagem[])
+      // Nada mudou (mesmo id/status/conteúdo, mesma ordem): devolve o array
+      // anterior pra NÃO disparar re-render nem o auto-scroll à toa no poll.
+      const igual =
+        merged.length === prev.length &&
+        merged.every((m, i) => m.id === prev[i].id && m.status === prev[i].status && m.conteudo === prev[i].conteudo)
+      return igual ? prev : merged
+    })
   }
 
   // Marca as recebidas como lidas (apaga o badge "nova" no funil).
@@ -135,9 +155,30 @@ function ChatPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLead])
 
+  // Marca se o usuário está (ou não) no fim da conversa a cada rolagem manual.
+  function onMsgsScroll() {
+    const el = msgsRef.current
+    if (!el) return
+    const distanciaDoFim = el.scrollHeight - el.scrollTop - el.clientHeight
+    nearBottomRef.current = distanciaDoFim < 120
+  }
+
   useEffect(() => {
-    msgsRef.current?.scrollTo({ top: msgsRef.current.scrollHeight, behavior: 'smooth' })
-  }, [mensagens])
+    const el = msgsRef.current
+    if (!el) return
+    // Abriu outra conversa: vai direto pro fim (sem animação) e reseta o "seguir".
+    if (leadScrollRef.current !== activeLead?.id) {
+      leadScrollRef.current = activeLead?.id ?? null
+      el.scrollTop = el.scrollHeight
+      nearBottomRef.current = true
+      return
+    }
+    // Mesma conversa: só acompanha o fim se o usuário já estava no fim.
+    // Se ele rolou pra cima pra ler o histórico, não arrasta a tela de volta.
+    if (nearBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    }
+  }, [mensagens, activeLead])
 
   async function toggleIA(on: boolean) {
     if (!activeLead) return
@@ -419,7 +460,7 @@ function ChatPageInner() {
                 </div>
               )}
 
-              <div ref={msgsRef} className="flex-1 overflow-y-auto p-4 space-y-2 bg-slate-50">
+              <div ref={msgsRef} onScroll={onMsgsScroll} className="flex-1 overflow-y-auto p-4 space-y-2 bg-slate-50">
                 {mensagens.map((m, i) => {
                   const isIn = m.direcao === 'in'
                   const isIA = m.direcao === 'out_ia'

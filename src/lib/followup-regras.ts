@@ -8,6 +8,7 @@ export type TriggerNome =
   | 'followup_pos_visita'
   | 'recuperacao'
   | 'reengajamento'
+  | 'reengajamento_agendado'
   | 'lembrete_dia'
   | 'resgate_no_show'
 
@@ -74,6 +75,21 @@ export function respondeuAposFollowup(ultimaInteracaoMs: number, ultimoFollowupM
   return ultimoFollowupMs > 0 && ultimaInteracaoMs > ultimoFollowupMs
 }
 
+// REENGAJAMENTO AGENDADO (Repescagem) — a família pediu para decidir mais pra frente e a
+// Sara combinou uma data (`reativar_em`). Enquanto essa data é FUTURA, o lead fica dormente
+// e o follow-up NÃO cutuca (o contrário da régua antiga, que o perseguia e o jogava em
+// "Perdidos"). Quando a data chega, sai UM toque caloroso (trigger 'reengajamento_agendado').
+
+/** O lead está dormente? (tem data de reativação ainda no futuro -> não cutucar) */
+export function estaDormente(reativarEmMs: number, agoraMs: number): boolean {
+  return reativarEmMs > agoraMs
+}
+
+/** Chegou a hora de reengajar? (tem data de reativação e ela já passou) */
+export function reativacaoDevida(reativarEmMs: number, agoraMs: number): boolean {
+  return reativarEmMs > 0 && reativarEmMs <= agoraMs
+}
+
 /** A visita agendada é amanhã (no fuso de Acre)? — caso especial da confirmação. */
 export function ehVisitaAmanha(dataVisitaMs: number, agoraMs: number): boolean {
   const wVisita = new Date(dataVisitaMs + ACRE_SHIFT_MS)
@@ -136,7 +152,7 @@ export function deveMarcarPerdidoPorSilencio(
 export function anguloPorTentativa(tentativa: number): string {
   switch (tentativa) {
     case 1:
-      return ' Este é o primeiro reforço: reduza ao mínimo o custo de responder. Faça UMA pergunta curta e fácil, que se responda em uma palavra. Não peça visita ainda.'
+      return ' Este é o primeiro reforço: reduza ao mínimo o custo de responder. Faça UMA pergunta curta e fácil, que se responda em uma palavra, mas ANCORADA num detalhe específico desta conversa (o nome e o interesse da criança, a dor que a família trouxe), nunca um "tudo bem?" genérico. Não peça visita ainda.'
     case 2:
       return ' Este é o segundo reforço: entregue valor ANTES de pedir qualquer coisa. Cite um diferencial concreto da escola e só então faça sua pergunta.'
     case 3:
@@ -161,7 +177,8 @@ export function anguloPorTentativa(tentativa: number): string {
  */
 export const FORMA =
   ' ABERTURA: a primeira linha decide se a família lê ou arquiva a mensagem, então comece por algo específico desta conversa (o primeiro nome da criança quando você já o souber, um detalhe da visita ou do que a família falou por último), nunca por saudação genérica como "oi, tudo bem?".' +
-  ' FORMA: no máximo 2 balões curtos. Nunca use travessão. Datas sempre absolutas, com dia da semana e data. Escreva com as palavras desta conversa, nunca copie frases prontas.'
+  ' FORMA: no máximo 2 balões curtos. Nunca use travessão. Datas sempre absolutas, com dia da semana e data. Escreva com as palavras desta conversa, nunca copie frases prontas.' +
+  ' MOTIVO: toda mensagem precisa dar à família um motivo concreto para responder hoje: um detalhe específico desta conversa (o nome e o interesse da criança, a dor que a família trouxe, algo da visita), uma novidade verdadeira da escola ou um próximo passo concreto. NUNCA mande uma cutucada vazia que só pergunta se já é um bom momento, se já deram uma olhada ou se está tudo bem por aí, devolvendo o trabalho para a família sem oferecer nada em troca. Sem nada novo e verdadeiro a dizer, ancore na dor ou no interesse que a própria família já revelou.'
 
 /**
  * Cronograma do pós-visita: offsets (em horas) a partir de `entrou_coluna_em`.
@@ -187,8 +204,17 @@ export function estaDevidoPosVisita(entrouColunaMs: number, toquesEnviados: numb
   return entrouColunaMs + offsetMs <= agoraMs
 }
 
-/** Texto do prompt que orienta a Sara conforme o gatilho. */
-export function promptPorTrigger(trigger: TriggerNome, nome: string, tentativa: number): string {
+/**
+ * Texto do prompt que orienta a Sara conforme o gatilho.
+ * `motivoReengajamento` só é usado pelo gatilho 'reengajamento_agendado': é o prazo/contexto
+ * que a própria família deu (crm.leads.reativar_motivo), para o toque citar o combinado.
+ */
+export function promptPorTrigger(
+  trigger: TriggerNome,
+  nome: string,
+  tentativa: number,
+  motivoReengajamento?: string | null
+): string {
   const angulo = tentativa >= 2 ? anguloPorTentativa(tentativa - 1) : ''
 
   // Reforço de forma compartilhado (ver FORMA).
@@ -218,6 +244,15 @@ export function promptPorTrigger(trigger: TriggerNome, nome: string, tentativa: 
       return tentativa >= 2
         ? `Recupere ${nome}, que está há dias sem avançar e já recebeu um toque seu sem resposta. NÃO repita a proposta de visita do toque anterior: conduza conforme o ângulo indicado abaixo, que muda a abordagem para não soar cobrança. Reforce no máximo UM diferencial concreto e verdadeiro (a turma de no máximo 10 crianças, o acompanhamento próximo da rotina). Faça UMA pergunta só.${angulo}${forma}`
         : `Recupere ${nome}, que está há dias sem avançar. Seja calorosa e ATIVA. Reforce um diferencial concreto, como a turma de no máximo 10 crianças e o acompanhamento próximo da rotina, e PROPONHA um próximo passo concreto: dois horários de visita com dia e data, ou segurar a vaga da criança. Faça UMA pergunta fechada, nunca dois pedidos na mesma mensagem.${forma}`
+    case 'reengajamento_agendado': {
+      // REENGAJAMENTO AGENDADO — a família PEDIU para decidir mais pra frente e combinou com
+      // você uma época para retomar; essa época chegou agora. NÃO é uma cutucada de quem
+      // sumiu: é você HONRANDO o combinado. Tom caloroso, zero cobrança, zero escassez.
+      const gancho = motivoReengajamento?.trim()
+        ? ` A família tinha dito o seguinte quando pediu prazo: "${motivoReengajamento.trim()}". Use isso para mostrar que você lembrou do combinado.`
+        : ''
+      return `Chegou a época em que ${nome} combinou com você de retomar a conversa. Semanas atrás a família pediu para decidir sobre a escola mais pra frente, e esse momento chegou agora.${gancho} Retome com leveza e genuíno cuidado: deixe claro que você está voltando porque ela pediu e ancore na situação que ela mesma descreveu quando pediu prazo, perguntando como as coisas evoluíram desde então. NÃO cobre decisão, NÃO empurre visita nesta primeira mensagem e NUNCA invente escassez de vagas. Faça UMA pergunta aberta e gentil que convide a família a retomar.${forma}`
+    }
     case 'reengajamento':
       // AUDITORIA CMO 2026-10-29 — mesmo conflito da recuperacao: o corpo propunha visita
       // em todo toque, colidindo com o ângulo do reforço. No reforço, segue o ângulo.

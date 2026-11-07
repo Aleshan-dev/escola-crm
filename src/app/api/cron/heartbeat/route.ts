@@ -52,6 +52,15 @@ export async function GET(req: NextRequest) {
     .not('texto_norm', 'is', null)
     .then(({ error }) => error && console.error('[heartbeat] poda do envio_ledger falhou:', error.message))
 
+  // Faxina do ledger de wids enviados (crm.wid_enviado): só serve ao webhook para
+  // distinguir, em segundos, o eco da Sara de uma resposta digitada no celular. 1h é
+  // folga generosa; apaga o que for mais antigo para a tabela não crescer.
+  await supabase
+    .from('wid_enviado')
+    .delete()
+    .lt('criado_em', new Date(agora - 3_600_000).toISOString())
+    .then(({ error }) => error && console.error('[heartbeat] faxina do wid_enviado falhou:', error.message))
+
   // Casos parados (src/lib/casos/cobranca.ts): independe do follow-up estar ligado;
   // só em horário comercial (avisa a equipe e pode falar com a família). Falha aqui
   // não derruba o resto do heartbeat.

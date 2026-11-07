@@ -90,15 +90,16 @@ export function FunilMatriculados() {
   const totalMatriculados = colunas.reduce((s, t) => s + t.ocupacao, 0) + semTurma.length
 
   return (
-    <div className="overflow-x-auto p-4">
-      <div className="mb-3 px-1 text-xs text-slate-500">
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="px-5 pt-3 pb-1 text-xs text-slate-500">
         {totalMatriculados} matriculado(s) em {colunas.length} turma(s) — dados do SGEI (Escola Guardiã).
       </div>
-      <div className="flex gap-3 min-w-max items-start">
+      <div className="scroll-x-always flex-1 min-h-0 px-4 pb-4 pt-1">
+      <div className="flex gap-3 min-w-max items-stretch h-full">
         {colunas.map((t) => {
           const lotada = t.ocupacao >= t.capacidade
           return (
-            <div key={t.id} className="w-[260px] flex-shrink-0 bg-slate-100 rounded-xl p-2.5">
+            <div key={t.id} className="w-[260px] flex-shrink-0 flex flex-col h-full max-h-full bg-slate-100 rounded-xl p-2.5">
               <div className="flex items-center justify-between mb-2 px-1">
                 <div className="flex items-center gap-2 min-w-0">
                   <GraduationCap className="w-4 h-4 text-slate-500 flex-shrink-0" />
@@ -113,7 +114,7 @@ export function FunilMatriculados() {
                   {t.ocupacao}/{t.capacidade}
                 </span>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-0.5">
                 {t.alunos.map((a) => (
                   <CardAluno key={a.id} a={a} />
                 ))}
@@ -128,13 +129,13 @@ export function FunilMatriculados() {
         })}
 
         {semTurma.length > 0 && (
-          <div className="w-[260px] flex-shrink-0 bg-slate-100 rounded-xl p-2.5">
+          <div className="w-[260px] flex-shrink-0 flex flex-col h-full max-h-full bg-slate-100 rounded-xl p-2.5">
             <div className="flex items-center gap-2 mb-2 px-1">
               <Users className="w-4 h-4 text-slate-400" />
               <span className="text-sm font-medium text-slate-500">Sem turma</span>
               <span className="text-[11px] bg-white border border-slate-200 rounded-full px-2 py-0.5 text-slate-600">{semTurma.length}</span>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-0.5">
               {semTurma.map((a) => (
                 <CardAluno key={a.id} a={a} />
               ))}
@@ -145,6 +146,7 @@ export function FunilMatriculados() {
         {colunas.length === 0 && semTurma.length === 0 && (
           <div className="text-sm text-slate-400 p-8">Nenhuma turma encontrada no SGEI.</div>
         )}
+      </div>
       </div>
     </div>
   )

@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase-server'
 import { enviarTextoComFallback } from '@/lib/janela'
 import { canalDeSaida } from '@/lib/whatsapp-cloud'
 import { enviarProtegido } from '@/lib/envio/portao'
+import { assinar, nomeAssinaturaDoUsuario } from '@/lib/assinatura'
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
@@ -21,6 +22,10 @@ export async function POST(req: NextRequest) {
 
   if (!lead?.familia?.telefone) return NextResponse.json({ error: 'Lead sem telefone' }, { status: 400 })
 
+  // Assina a mensagem com o nome de quem está enviando pelo painel (ex.: "Aleshan:").
+  // Só o que SAI é assinado; o histórico grava o texto limpo.
+  const textoEnviar = assinar(nomeAssinaturaDoUsuario(user), texto)
+
   try {
     // Portão de envio: o envio humano NUNCA é barrado — entra na contagem do número
     // (ledger) e devolve avisos (opt-out, teto do dia) para a tela mostrar.
@@ -33,9 +38,9 @@ export async function POST(req: NextRequest) {
       const canal = await canalDeSaida(tel, phoneId)
       const pr = await enviarProtegido(
         { origem: 'manual', canal, telefone: tel, leadId: lead_id, familiaId: lead.familia_id },
-        texto,
+        textoEnviar,
         async () => {
-          r = await enviarTextoComFallback(tel, texto, { leadId: lead_id, phoneId, familiaId: lead.familia_id, canalEsperado: canal })
+          r = await enviarTextoComFallback(tel, textoEnviar, { leadId: lead_id, phoneId, familiaId: lead.familia_id, canalEsperado: canal })
           if (!r.enviado) throw new Error(JANELA) // não saiu: o ledger registra 'falhou'
           return r.wid ?? null
         },

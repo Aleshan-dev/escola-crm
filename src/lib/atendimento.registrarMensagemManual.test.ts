@@ -5,20 +5,22 @@ import { registrarMensagemManual } from './atendimento'
 // o WAHA ecoa a própria resposta da Sara como fromMe=true. Esse eco corre com a
 // gravação do out_ia — o SELECT de dedupe roda antes de o out_ia commitar e não
 // acha nada. O índice único uq_mensagens_whatsapp_message_id é o dedupe
-// AUTORITATIVO: o insert do out_humano bate 23505. Antes do fix, o erro era
-// ignorado e a IA era pausada ("atendente respondeu manualmente"). Agora o 23505
-// significa "é eco da própria Sara" → não pausa.
+// AUTORITATIVO: o insert do out_humano bate 23505 → "é eco da própria Sara", não pausa.
 //
-// Complemento (29/10/2026): no 1º balão de uma resposta multi-balão o eco pode
-// GANHAR a corrida e gravar o out_humano antes do app gravar o out_ia — aí não há
-// 23505. A trava de resposta (leads.resposta_lock_em) está fresca durante todo o
-// envio; lock fresco ⇒ o fromMe é eco nosso → grava out_ia e não pausa.
+// ATRIBUIÇÃO POR LEDGER (04/11/2026, caso Cris Ferreira): o sinal primário deixou de
+// ser o palpite "lock fresco ⇒ Sara" e passou a ser FATO — o wid está no ledger
+// crm.wid_enviado (gravado no envio pelo WAHA)? Sim ⇒ eco nosso (out_ia, não pausa).
+// Não ⇒ mensagem digitada no celular por um humano (out_humano + pausa), MESMO com o
+// lock fresco. Antes, um humano respondendo pelo aparelho durante o turno da Sara era
+// rotulado como Sara e a IA seguia falando por cima. O lock/recência vira só fallback
+// para o caso-limite sem wid.
 
 type Resolvido = { data?: unknown; error?: unknown }
 
 function fakeSupabase(cfg: {
   dedupe: Resolvido // mensagens.select do wid -> acha ou não
-  outIaRecente?: Resolvido // mensagens.select com .gt -> out_ia nos últimos segundos
+  ledger?: Resolvido // wid_enviado.select do wid -> nosso envio (tem) ou não
+  outIaRecente?: Resolvido // mensagens.select com .gt -> out_ia nos últimos segundos (fallback sem wid)
   insertMensagem: Resolvido // mensagens.insert -> ok ou erro (23505)
   lead: { id: string; ia_ativa: boolean; resposta_lock_em?: string | null }
 }) {
@@ -51,6 +53,7 @@ function fakeSupabase(cfg: {
     b.then = (resolve: (v: Resolvido) => void) => {
       let v: Resolvido = {}
       if (table === 'mensagens' && op === 'select') v = usouGt ? (cfg.outIaRecente ?? { data: null }) : cfg.dedupe
+      else if (table === 'wid_enviado' && op === 'select') v = cfg.ledger ?? { data: null }
       else if (table === 'mensagens' && op === 'insert') v = cfg.insertMensagem
       else if (table === 'familias' && op === 'select') v = { data: { id: 'fam1' } }
       else if (table === 'leads' && op === 'select') v = { data: cfg.lead }
@@ -70,6 +73,7 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
   it('eco da Sara (wid colide no índice único, 23505) NÃO pausa a IA', async () => {
     const { supabase, calls } = fakeSupabase({
       dedupe: { data: null }, // SELECT correu antes do out_ia commitar
+      ledger: { data: null }, // ledger também ainda não tem (corrida extrema) — 23505 é a rede
       insertMensagem: { error: { code: '23505' } }, // índice único barrou o duplicado
       lead: { id: 'lead1', ia_ativa: true },
     })
@@ -85,9 +89,10 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
     expect(calls.eventoPausa).toBe(0)
   })
 
-  it('resposta humana real (insert ok) pausa a IA, como manda a ADR-005', async () => {
+  it('resposta humana real (wid fora do ledger, insert ok) pausa a IA, como manda a ADR-005', async () => {
     const { supabase, calls } = fakeSupabase({
       dedupe: { data: null },
+      ledger: { data: null }, // não foi o sistema que enviou
       insertMensagem: { error: null }, // wid novo, inseriu de verdade
       lead: { id: 'lead1', ia_ativa: true },
     })
@@ -103,9 +108,10 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
     expect(calls.eventoPausa).toBe(1)
   })
 
-  it('eco do 1º balão (sem 23505) com trava de resposta fresca NÃO pausa', async () => {
+  it('eco do balão (wid NO ledger) NÃO pausa, mesmo sem 23505 e com a corrida ganha', async () => {
     const { supabase, calls } = fakeSupabase({
-      dedupe: { data: null }, // out_ia deste balão ainda não existe
+      dedupe: { data: null }, // out_ia deste balão ainda não existe em mensagens
+      ledger: { data: { wid: 'true_131533474132178@lid_3EB0' } }, // mas o ENVIO está registrado
       insertMensagem: { error: null }, // o eco GANHOU a corrida: insert do out_ia foi aceito
       lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: new Date().toISOString() },
     })
@@ -122,10 +128,10 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
     expect(calls.eventoPausa).toBe(0)
   })
 
-  it('2º balão por caminho SEM trava (ex.: "responder agora"): out_ia recente evita a pausa', async () => {
+  it('2º balão por caminho SEM trava (ex.: "responder agora"): wid no ledger evita a pausa', async () => {
     const { supabase, calls } = fakeSupabase({
       dedupe: { data: null }, // eco deste balão ainda não gravado como out_ia
-      outIaRecente: { data: { id: 'out-ia-do-balao-1' } }, // balão 1 saiu há segundos
+      ledger: { data: { wid: 'true_131533474132178@lid_3EB043DD' } }, // envio nosso
       insertMensagem: { error: null }, // o eco ganhou a corrida do insert
       lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: null }, // endpoint não segurou a trava
     })
@@ -141,18 +147,55 @@ describe('registrarMensagemManual — eco fromMe vs resposta humana real', () =>
     expect(calls.eventoPausa).toBe(0)
   })
 
-  it('trava de resposta OBSOLETA (>TTL) e sem out_ia recente: cai no fluxo de resposta humana', async () => {
+  it('caso Cris: humano digita no celular DURANTE o turno (wid fora do ledger, lock fresco) → pausa', async () => {
+    const { supabase, calls } = fakeSupabase({
+      dedupe: { data: null }, // wid novo, não está em mensagens
+      ledger: { data: null }, // NÃO foi o sistema que enviou → é o humano no aparelho
+      insertMensagem: { error: null }, // inseriu como out_humano de verdade
+      lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: new Date().toISOString() }, // lock fresco!
+    })
+
+    const r = await registrarMensagemManual(supabase, {
+      telefone: '5568999573601',
+      conteudo: 'As 14:30 temos outra visita agendada. Não gostaria de remarcar para amanhã?',
+      wid: 'true_131533474132178@lid_2ADA', // assinatura de msg digitada no aparelho
+    })
+
+    expect(r).toBe('registrado_out_humano') // antes do fix era 'fromMe_sara' (bug)
+    expect(calls.pauseUpdate).toBe(1) // desligou a Sara: o atendente assumiu
+    expect(calls.eventoPausa).toBe(1)
+  })
+
+  it('fallback SEM wid: lock fresco ainda trata como eco (conservador p/ não calar a Sara)', async () => {
+    const { supabase, calls } = fakeSupabase({
+      dedupe: { data: null },
+      insertMensagem: { error: null },
+      lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: new Date().toISOString() },
+    })
+
+    const r = await registrarMensagemManual(supabase, {
+      telefone: '5568999573601',
+      conteudo: '[mídia sem id]',
+      wid: '', // sem wid: não dá para casar no ledger
+    })
+
+    expect(r).toBe('fromMe_sara')
+    expect(calls.pauseUpdate).toBe(0)
+  })
+
+  it('trava de resposta OBSOLETA (>TTL), sem wid e sem out_ia recente: cai na resposta humana', async () => {
     const velho = new Date(Date.now() - 120_000).toISOString() // 2 min > LOCK_TTL_MS (60s)
     const { supabase, calls } = fakeSupabase({
       dedupe: { data: null },
-      insertMensagem: { error: null }, // wid novo, humano de verdade
+      outIaRecente: { data: null },
+      insertMensagem: { error: null }, // humano de verdade
       lead: { id: 'lead1', ia_ativa: true, resposta_lock_em: velho },
     })
 
     const r = await registrarMensagemManual(supabase, {
       telefone: '5568999573601',
       conteudo: 'Oi, aqui é a secretaria',
-      wid: 'true_wid_humano_apos_lock',
+      wid: '', // sem wid → fallback por lock/recência
     })
 
     expect(r).toBe('registrado_out_humano')
