@@ -673,7 +673,7 @@ Quando a família sinalizar que NÃO vai decidir agora e quer resolver mais pra 
 FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
 ════════════════════════════════
 {
-  "resposta": "texto para a família",
+  "resposta": "texto para a família: no máximo 2 parágrafos curtos separados por linha em branco, cada um com NO MÁXIMO 35 palavras (é WhatsApp, cada parágrafo vira um balão)",
   "proxima_coluna_id": "uuid ou null",
   "razao_movimentacao": "texto ou null",
   "familia_dados": { "nome_responsavel": "...", "email": "..." } ou null,
