@@ -14,8 +14,16 @@ export const ORIGENS_ARCA = new Set([
   'http://localhost:8080',
 ])
 
-/** Rotas do CRM que o ARCA chama com Bearer. */
-export const ROTAS_ARCA = ['/api/mensagens/enviar', '/api/notificar-desfecho']
+/**
+ * O ARCA pode chamar com Bearer QUALQUER rota de /api, menos as máquina-a-máquina
+ * (webhooks, cron, admin, Google), que têm autenticação própria.
+ */
+export function rotaAceitaArca(pathname: string): boolean {
+  if (!pathname.startsWith('/api/')) return false
+  // Exceção: o botão "Auditar agora" (Auditoria da Sara) dispara o auditor sob demanda.
+  if (pathname === '/api/cron/auditor') return true
+  return !/^\/api\/(webhook|cron|admin|google\/push-tarefa|google\/webhook)/.test(pathname)
+}
 
 export function bearerDe(req: NextRequest): string | null {
   return req.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null

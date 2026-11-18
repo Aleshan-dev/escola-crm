@@ -1,6 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
-import { ORIGENS_ARCA, ROTAS_ARCA, bearerDe, clienteComToken } from '@/lib/auth-arca'
+import { ORIGENS_ARCA, bearerDe, clienteComToken, rotaAceitaArca } from '@/lib/auth-arca'
 
 /** Papéis do ARCA (profiles.papel) que operam o CRM. Igual a crm.pode_operar() no banco. */
 const PAPEIS_EQUIPE = new Set(['direcao', 'secretaria', 'comercial'])
@@ -28,14 +28,14 @@ export async function middleware(request: NextRequest) {
   )
 
   // Rotas que o ARCA chama de outro domínio com Bearer (ver lib/auth-arca.ts).
-  const rotaArca = ROTAS_ARCA.includes(request.nextUrl.pathname)
+  const rotaArca = rotaAceitaArca(request.nextUrl.pathname)
   const origem = request.headers.get('origin') ?? ''
   const cors: Record<string, string> =
     rotaArca && ORIGENS_ARCA.has(origem)
       ? {
           'Access-Control-Allow-Origin': origem,
           'Access-Control-Allow-Headers': 'authorization, content-type',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
           'Access-Control-Max-Age': '600',
           Vary: 'Origin',
         }
@@ -43,7 +43,9 @@ export async function middleware(request: NextRequest) {
   if (rotaArca && request.method === 'OPTIONS') {
     return new NextResponse(null, { status: cors['Access-Control-Allow-Origin'] ? 204 : 403, headers: cors })
   }
-  const token = rotaArca ? bearerDe(request) : null
+  // Só JWT do Supabase conta como login do ARCA (Bearer CRON_SECRET etc. segue o caminho antigo).
+  const bruto = rotaArca ? bearerDe(request) : null
+  const token = bruto && /^eyJ[\w-]*\.[\w-]+\.[\w-]+$/.test(bruto) ? bruto : null
   const clienteToken = token ? clienteComToken(token) : null
 
   const user = clienteToken
@@ -69,7 +71,8 @@ export async function middleware(request: NextRequest) {
   const isPublic = url.pathname.startsWith('/privacy') || url.pathname.startsWith('/termos')
 
   // Webhooks do WhatsApp não precisam de auth
-  if (isApiWebhook) return supabaseResponse
+  // Com Bearer do ARCA (só /api/cron/auditor chega aqui assim) segue para a checagem de papel.
+  if (isApiWebhook && !clienteToken) return supabaseResponse
 
   // Deixa o callback do OAuth (Google) completar a troca do code pela sessão
   if (isAuthCallback) return supabaseResponse
