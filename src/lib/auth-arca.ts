@@ -22,6 +22,8 @@ export function rotaAceitaArca(pathname: string): boolean {
   if (!pathname.startsWith('/api/')) return false
   // Exceção: o botão "Auditar agora" (Auditoria da Sara) dispara o auditor sob demanda.
   if (pathname === '/api/cron/auditor') return true
+  // Exceção: "Rodar agora" do follow-up (IA Avançada) — o segredo do cron fica no servidor.
+  if (pathname === '/api/admin/rodar-cron') return true
   return !/^\/api\/(webhook|cron|admin|google\/push-tarefa|google\/webhook)/.test(pathname)
 }
 
