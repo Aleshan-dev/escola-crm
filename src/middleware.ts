@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { ORIGENS_ARCA, ROTAS_ARCA, bearerDe, clienteComToken } from '@/lib/auth-arca'
 
 /** Papéis do ARCA (profiles.papel) que operam o CRM. Igual a crm.pode_operar() no banco. */
 const PAPEIS_EQUIPE = new Set(['direcao', 'secretaria', 'comercial'])
@@ -26,7 +27,28 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  // Rotas que o ARCA chama de outro domínio com Bearer (ver lib/auth-arca.ts).
+  const rotaArca = ROTAS_ARCA.includes(request.nextUrl.pathname)
+  const origem = request.headers.get('origin') ?? ''
+  const cors: Record<string, string> =
+    rotaArca && ORIGENS_ARCA.has(origem)
+      ? {
+          'Access-Control-Allow-Origin': origem,
+          'Access-Control-Allow-Headers': 'authorization, content-type',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Max-Age': '600',
+          Vary: 'Origin',
+        }
+      : {}
+  if (rotaArca && request.method === 'OPTIONS') {
+    return new NextResponse(null, { status: cors['Access-Control-Allow-Origin'] ? 204 : 403, headers: cors })
+  }
+  const token = rotaArca ? bearerDe(request) : null
+  const clienteToken = token ? clienteComToken(token) : null
+
+  const user = clienteToken
+    ? (await clienteToken.auth.getUser(token!)).data.user
+    : (await supabase.auth.getUser()).data.user
 
   const url = request.nextUrl
   const isAuthRoute = url.pathname.startsWith('/login')
@@ -52,6 +74,11 @@ export async function middleware(request: NextRequest) {
   // Deixa o callback do OAuth (Google) completar a troca do code pela sessão
   if (isAuthCallback) return supabaseResponse
 
+  // Chamada do ARCA sem token válido: 401 com CORS (não redireciona para /login).
+  if (rotaArca && !user) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401, headers: cors })
+  }
+
   // Não logado → manda pra login
   if (!user && !isAuthRoute && !isPublic) {
     return NextResponse.redirect(new URL('/login', request.url))
@@ -63,15 +90,17 @@ export async function middleware(request: NextRequest) {
   // pela RLS (crm.pode_operar()); isto evita a tela quebrada e vazia.
   const isSemAcesso = url.pathname.startsWith('/sem-acesso')
   if (user && !isPublic && !isSemAcesso) {
-    const { data: perfil } = await supabase.schema('public').from('profiles').select('papel').eq('id', user.id).maybeSingle()
+    const { data: perfil } = await (clienteToken ?? supabase).schema('public').from('profiles').select('papel').eq('id', user.id).maybeSingle()
     const papel = (perfil as { papel?: string } | null)?.papel ?? 'sem_acesso'
     if (!PAPEIS_EQUIPE.has(papel)) {
       if (url.pathname.startsWith('/api')) {
-        return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+        return NextResponse.json({ error: 'forbidden' }, { status: 403, headers: cors })
       }
       return NextResponse.redirect(new URL('/sem-acesso', request.url))
     }
   }
+
+  for (const [k, v] of Object.entries(cors)) supabaseResponse.headers.set(k, v)
 
   // Logado e tentando acessar login → manda pro kanban
   if (user && isAuthRoute) {

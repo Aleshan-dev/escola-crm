@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient, createServerAdminClient } from '@/lib/supabase-server'
+import { createServerAdminClient } from '@/lib/supabase-server'
+import { clienteDaRequisicao } from '@/lib/auth-arca'
 import { notificarGestor } from '@/lib/notificacoes'
 
 // Notifica o gestor quando um lead é movido (manualmente) para um desfecho
 // do funil (Matriculados ou Perdidos). Chamado pelo front após a mudança de etapa.
 export async function POST(req: NextRequest) {
-  const sb = await createClient()
-  const { data: userData } = await sb.auth.getUser()
-  if (!userData.user) return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+  const { user } = await clienteDaRequisicao(req)
+  if (!user) return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
 
   const { lead_id, coluna } = await req.json().catch(() => ({}))
   if (!lead_id || !coluna) {

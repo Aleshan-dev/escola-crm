@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase-server'
+import { clienteDaRequisicao } from '@/lib/auth-arca'
 import { enviarTextoComFallback } from '@/lib/janela'
 import { canalDeSaida } from '@/lib/whatsapp-cloud'
 import { enviarProtegido } from '@/lib/envio/portao'
 import { assinar, nomeAssinaturaDoUsuario } from '@/lib/assinatura'
 
 export async function POST(req: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  // Cookie do CRM ou Bearer do ARCA (telas de Relacionamento): ver lib/auth-arca.ts.
+  const { supabase, user } = await clienteDaRequisicao(req)
   if (!user) return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
 
   const { lead_id, texto } = await req.json()
