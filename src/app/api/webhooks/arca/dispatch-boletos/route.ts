@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
 import { arcaConfigurado } from '@/lib/arca'
-import { evolutionConfigurado } from '@/lib/evolution'
-import { convitesConfigurado, drenarConvites } from '@/lib/convites'
+import { canalNaoOficial, evolutionConfigurado, evolutionSendText } from '@/lib/evolution'
+import { celularParaEvolution, convitesConfigurado, drenarConvites } from '@/lib/convites'
+import { enviarProtegido } from '@/lib/envio/portao'
 import { registrarAlerta } from '@/lib/alertas'
 
 // Gatilho do Arca ("Acionar Salomão"). O Arca monta a fila; ela é entregue pelo
@@ -103,6 +104,37 @@ export async function POST(req: NextRequest) {
       }
     })
     return NextResponse.json({ ok: true, aceito: true, fila: 'convites' })
+  }
+
+  // -- código de acesso do app da família (envio único, NA HORA) ------------
+  // Diferente das filas: é 1 mensagem pedida pelo próprio responsável, que está
+  // esperando na tela do app. Sai pelo portão com origem `codigo_acesso`
+  // (transacional: sem janela, sem espera, nunca barrado) e responde de forma
+  // SÍNCRONA, para o Arca dizer ao pai se o código saiu ou não. O texto vem
+  // pronto do Arca; o CRM não guarda nem registra o código no chat.
+  if (evento === 'enviar_codigo_acesso') {
+    const c = corpo as { celular?: string; mensagem?: string }
+    const numero = celularParaEvolution(c.celular ?? '')
+    const texto = (c.mensagem ?? '').trim()
+    if (!numero || !texto || texto.length > 500) {
+      return NextResponse.json({ ok: false, error: 'dados_invalidos' }, { status: 400 })
+    }
+    try {
+      const r = await enviarProtegido(
+        { origem: 'codigo_acesso', canal: canalNaoOficial(), telefone: numero },
+        texto,
+        async () => (await evolutionSendText(numero, texto))?.key?.id ?? null,
+      )
+      if (r.status !== 'enviado') {
+        return NextResponse.json({ ok: false, error: `${r.status}:${r.motivo}` }, { status: 502 })
+      }
+      return NextResponse.json({ ok: true, enviado: true })
+    } catch (e) {
+      return NextResponse.json(
+        { ok: false, error: `falha_envio: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}` },
+        { status: 502 },
+      )
+    }
   }
 
   // -- fila de mensagens em massa (Disparo do Salomão) ----------------------

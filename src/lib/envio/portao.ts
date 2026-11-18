@@ -75,7 +75,7 @@ const tipoDe = (m: MotivoBloqueio): 'vetado' | 'adiado' => (VETO.includes(m) ? '
  * é pior que o risco — esses viram registro. Proativas: todos barram.
  */
 export function motivoBarra(origem: OrigemEnvio, motivo: MotivoBloqueio): boolean {
-  if (origem === 'manual' || origem === 'aviso_interno') return false
+  if (origem === 'manual' || origem === 'aviso_interno' || origem === 'codigo_acesso') return false
   if (origem === 'resposta_ia') return motivo === 'opt_out'
   return true
 }
@@ -180,7 +180,7 @@ export async function enviarProtegido(
   }
 
   // Portão 5: espera do intervalo (só no modo ativo — em log o ritmo não muda).
-  if (modo === 'ativo' && ctx.origem !== 'manual' && esperar > 0) await deps.dormir(Math.min(esperar, ESPERA_MAX_MS))
+  if (modo === 'ativo' && ctx.origem !== 'manual' && ctx.origem !== 'codigo_acesso' && esperar > 0) await deps.dormir(Math.min(esperar, ESPERA_MAX_MS))
 
   try {
     const wid = await enviar()

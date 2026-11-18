@@ -1,6 +1,9 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+/** Papéis do ARCA (profiles.papel) que operam o CRM. Igual a crm.pode_operar() no banco. */
+const PAPEIS_EQUIPE = new Set(['direcao', 'secretaria', 'comercial'])
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -52,6 +55,22 @@ export async function middleware(request: NextRequest) {
   // Não logado → manda pra login
   if (!user && !isAuthRoute && !isPublic) {
     return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  // EQUIPE SÓ (18/11/2026). O CRM divide o `auth.users` com o ARCA, que agora
+  // tem contas de família (app dos pais) e de professoras. Logado não basta: só
+  // direção, secretaria e comercial (profiles.papel) entram. O banco já barra
+  // pela RLS (crm.pode_operar()); isto evita a tela quebrada e vazia.
+  const isSemAcesso = url.pathname.startsWith('/sem-acesso')
+  if (user && !isPublic && !isSemAcesso) {
+    const { data: perfil } = await supabase.schema('public').from('profiles').select('papel').eq('id', user.id).maybeSingle()
+    const papel = (perfil as { papel?: string } | null)?.papel ?? 'sem_acesso'
+    if (!PAPEIS_EQUIPE.has(papel)) {
+      if (url.pathname.startsWith('/api')) {
+        return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+      }
+      return NextResponse.redirect(new URL('/sem-acesso', request.url))
+    }
   }
 
   // Logado e tentando acessar login → manda pro kanban
