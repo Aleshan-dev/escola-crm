@@ -1079,7 +1079,7 @@ export async function processarMensagemRecebida(
               // src/lib/lembrete-visita.ts).
               await supabase
                 .from('tarefas')
-                .update({ data_hora: dhIso, resumo_pre_visita_em: null })
+                .update({ data_hora: dhIso, resumo_pre_visita_em: null, status: 'agendada' })
                 .eq('id', visitaAberta.id)
             } else {
               await supabase.from('tarefas').insert({

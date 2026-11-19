@@ -484,7 +484,43 @@ ${listaRegras}`
     cr?.motivo_busca && !ehLixo(cr.motivo_busca)
   )
 
-  const blocoAgenda = !descobertaFeita
+  // VISITA JÁ MARCADA (pedido da Direção 19/11/2026): a Sara precisa SABER que existe
+  // uma visita futura para reagendar quando a família diz que não pode ir. Sem isso ela
+  // tratava "não vou conseguir ir" como conversa nova. O servidor (atendimento.ts) já
+  // MOVE a visita aberta quando ela preenche agendar_visita — não cria uma segunda.
+  const { data: visitaMarcada } = await supabase
+    .from('tarefas')
+    .select('data_hora')
+    .eq('lead_id', leadId)
+    .eq('tipo', 'visita')
+    .eq('concluida', false)
+    .neq('status', 'cancelada')
+    .gte('data_hora', new Date().toISOString())
+    .order('data_hora', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  const labelVisitaMarcada = visitaMarcada
+    ? new Date(visitaMarcada.data_hora).toLocaleString('pt-BR', {
+        timeZone: 'America/Rio_Branco',
+        weekday: 'long',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null
+  const blocoVisitaMarcada = labelVisitaMarcada
+    ? `
+════════════════════════════════
+VISITA JÁ MARCADA
+════════════════════════════════
+Esta família JÁ TEM visita marcada: ${labelVisitaMarcada} (horário de Rio Branco/Acre).
+- Se a família disser que NÃO VAI PODER ir nesse horário (imprevisto, trabalho, doença, "não vou conseguir"), acolha sem cobrar e PROPONHA REAGENDAR: ofereça as duas opções da OFERTA PADRÃO (ou pergunte o melhor horário e use a AGENDA AMPLA). Quando ela escolher uma, preencha "agendar_visita" com o slot_id dela — o sistema MOVE a visita existente para o novo horário (não cria outra). Só então confirme: "prontinho, remarquei para ...".
+- Se ela só quer confirmar a visita atual, NÃO preencha "agendar_visita".
+- Se ela não puder agora e não quiser escolher nova data, acolha, diga que fica à disposição para remarcar quando for melhor e NÃO afirme que remarcou nada.`
+    : ''
+
+  const blocoAgenda = !descobertaFeita && !visitaMarcada
     ? `
 ════════════════════════════════
 AGENDAMENTO DE VISITA — BLOQUEADO (descoberta incompleta)
@@ -617,6 +653,7 @@ REGRA: só ofereça a visita depois de ter nome + idade E ter surfaceado o motiv
 ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
+${blocoVisitaMarcada}
 ${blocoRegras}
 ${blocoAnotacoes}
 ${memoriaAtiva ? blocoMemoria(memoria.notas, config?.memoria_orcamento_chars ?? ORCAMENTO_PADRAO) : ''}
