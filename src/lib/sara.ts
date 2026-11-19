@@ -1,5 +1,5 @@
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { calcularSlotsDisponiveis } from '@/lib/disponibilidade'
+import { buscarDiasFechados, calcularSlotsDisponiveis } from '@/lib/disponibilidade'
 import { getOcupacaoDireta } from '@/lib/sgei'
 import { formatarIdade } from '@/lib/idade'
 import { resolverDiretrizes } from '@/lib/maestro/diretrizes'
@@ -409,10 +409,17 @@ ${listaRegras}`
   // (Histórico: o 720 veio da conversa da Gislainy, 29/07, para evitar oferta com
   // só 2h de aviso. `maxPorDia:1` segue espalhando as 2 opções em DIAS diferentes,
   // então um "nesse dia não dá" não derruba as duas.)
+  // Feriados/recessos do Calendário Escolar (ARCA, crm.dias_fechados): sem visita
+  // nesses dias. Pedido da Direção em 19/11/2026 — cadastrou no calendário, a
+  // agenda já fecha. Buscado uma vez e usado nas duas grades e no prompt.
+  const diasFechados = await buscarDiasFechados(supabase, 30)
+  const datasFechadas = diasFechados.map((d) => d.data)
+
   const slots = await calcularSlotsDisponiveis(supabase, {
     quantidade: 2,
     antecedenciaMin: 120,
     maxPorDia: 1,
+    diasFechados: datasFechadas,
   })
 
   // AJUSTE 2026-08-13 (feedback do gestor): quando a família dizia que não podia
@@ -426,6 +433,7 @@ ${listaRegras}`
     quantidade: 12,
     antecedenciaMin: 120,
     horizonteDias: 21,
+    diasFechados: datasFechadas,
   })
 
   // IDs estáveis para cada horário ofertado NESTE turno (oferta padrão + agenda ampla,
@@ -455,6 +463,12 @@ ${listaRegras}`
       const ini = h.hora_inicio ? String(h.hora_inicio).slice(0, 5) : ''
       const fim = h.hora_fim ? String(h.hora_fim).slice(0, 5) : ''
       return `- ${h.dia_semana}: ${ini}–${fim}`
+    })
+    .join('\n')
+  const listaFechados = diasFechados
+    .map((d) => {
+      const [a, m, dia] = d.data.split('-')
+      return `- ${dia}/${m}/${a}: ${d.motivo}`
     })
     .join('\n')
 
@@ -511,7 +525,7 @@ REAGENDAR uma visita JÁ MARCADA (a família quer mudar o horário/dia de uma vi
 
 AGENDA AMPLA — horários de visita livres nas próximas semanas (use SÓ para encaixar um pedido específico; NÃO liste tudo para a família). Ao confirmar um destes, use o "slot_id" entre colchetes:
 ${slotsAmplos.map((s) => `- [id=${idDoSlot(s.data_hora)}] ${s.label}`).join('\n')}
-${listaGrade ? `\nDIAS/HORÁRIOS em que a escola recebe visita (fora disso não há visita):\n${listaGrade}` : ''}`
+${listaGrade ? `\nDIAS/HORÁRIOS em que a escola recebe visita (fora disso não há visita):\n${listaGrade}` : ''}${listaFechados ? `\nDIAS SEM ATENDIMENTO (feriado/recesso do calendário escolar — a escola está FECHADA, não há visita; se a família pedir um destes dias, explique que é feriado e ofereça o próximo dia de visita):\n${listaFechados}` : ''}`
       : `
 ════════════════════════════════
 AGENDAMENTO DE VISITA

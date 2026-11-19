@@ -52,10 +52,11 @@ export function labelAcre(utc: Date): string {
  * visível da agenda. Quem booka usa isto para ALERTAR o gestor quando o horário cai
  * fora da grade (não reescrevemos: a família recebeu uma hora específica).
  */
-export function dentroDaJanelaVisita(iso: string, horarios: HorarioVisita[]): boolean {
+export function dentroDaJanelaVisita(iso: string, horarios: HorarioVisita[], diasFechados?: string[]): boolean {
   const ms = new Date(iso).getTime()
   if (isNaN(ms)) return false
   const w = new Date(ms + ACRE_SHIFT_MS) // parede de Acre via getUTC*
+  if (diasFechados?.includes(w.toISOString().slice(0, 10))) return false // feriado/recesso
   const dia = DIAS_PT[w.getUTCDay()]
   const minutos = w.getUTCHours() * 60 + w.getUTCMinutes()
   return horarios.some((h) => {
@@ -72,6 +73,9 @@ export type OpcoesSlot = {
   horizonteDias?: number
   antecedenciaMin?: number
   maxPorDia?: number // quando definido, limita e DISTRIBUI os horários por dia (manhã→tarde)
+  // Dias sem visita (AAAA-MM-DD, parede de Acre): feriados e recessos do Calendário
+  // Escolar do ARCA (crm.dias_fechados). Pedido da Direção em 19/11/2026.
+  diasFechados?: string[]
 }
 
 // Seleciona até n itens distribuídos ao longo do array (inclui o primeiro e o último).
@@ -113,6 +117,7 @@ export function gerarSlots(
     const base = new Date(
       Date.UTC(hojeAcre.getUTCFullYear(), hojeAcre.getUTCMonth(), hojeAcre.getUTCDate() + i)
     )
+    if (opts?.diasFechados?.includes(base.toISOString().slice(0, 10))) continue // feriado/recesso
     const nomeDia = DIAS_PT[base.getUTCDay()]
     const janelas = horarios.filter((h) => h.dia_semana === nomeDia && h.hora_inicio && h.hora_fim)
 
@@ -146,9 +151,33 @@ export function gerarSlots(
   return slots
 }
 
+export type DiaFechado = { data: string; motivo: string }
+
 /**
- * Wrapper com banco: busca `horarios_visita` (ativos) e as `tarefas` ocupadas
- * (inclui eventos do Google já sincronizados) e delega o cálculo à `gerarSlots`.
+ * Feriados e recessos do Calendário Escolar (ARCA) entre hoje e `dias` à frente,
+ * pela RPC crm.dias_fechados. Falha de leitura não derruba o atendimento: devolve [].
+ */
+export async function buscarDiasFechados(
+  supabase: ReturnType<typeof createServerAdminClient>,
+  dias = 45
+): Promise<DiaFechado[]> {
+  const hoje = new Date(Date.now() + ACRE_SHIFT_MS).toISOString().slice(0, 10)
+  const ate = new Date(Date.now() + ACRE_SHIFT_MS + dias * 86_400_000).toISOString().slice(0, 10)
+  const { data, error } = await supabase.rpc('dias_fechados', { p_de: hoje, p_ate: ate })
+  if (error) {
+    console.error('[disponibilidade] dias_fechados:', error.message)
+    return []
+  }
+  return ((data as { data: string; motivo: string }[] | null) || []).map((d) => ({
+    data: String(d.data).slice(0, 10),
+    motivo: d.motivo,
+  }))
+}
+
+/**
+ * Wrapper com banco: busca `horarios_visita` (ativos), as `tarefas` ocupadas
+ * (inclui eventos do Google já sincronizados) e os dias fechados do calendário
+ * escolar, e delega o cálculo à `gerarSlots`.
  */
 export async function calcularSlotsDisponiveis(
   supabase: ReturnType<typeof createServerAdminClient>,
@@ -173,5 +202,9 @@ export async function calcularSlotsDisponiveis(
     new Date(t.data_hora).getTime()
   )
 
-  return gerarSlots(horarios, ocupados, agora, opts)
+  const diasFechados =
+    opts?.diasFechados ??
+    (await buscarDiasFechados(supabase, (opts?.horizonteDias ?? 21) + 1)).map((d) => d.data)
+
+  return gerarSlots(horarios, ocupados, agora, { ...opts, diasFechados })
 }

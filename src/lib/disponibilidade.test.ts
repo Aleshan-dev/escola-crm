@@ -119,3 +119,32 @@ describe('dentroDaJanelaVisita (blindagem de fuso)', () => {
     expect(dentroDaJanelaVisita(acreWallToUtc(2026, 9, 28, 10, 0).toISOString(), grade)).toBe(false)
   })
 })
+
+// Pedido da Direção 19/11/2026: feriado/recesso do Calendário Escolar fecha a agenda.
+describe('dias fechados (feriado/recesso do calendário escolar)', () => {
+  const horarios: HorarioVisita[] = DIAS.map((d) => ({ dia_semana: d, hora_inicio: '08:00', hora_fim: '12:00' }))
+  // Quinta, 19/11/2026, 07:00 em Acre; sexta 20/11 é feriado (Consciência Negra).
+  const agora = acreWallToUtc(2026, 10, 19, 7, 0).getTime()
+
+  it('não oferece nenhum horário no dia do feriado', () => {
+    const slots = gerarSlots(horarios, [], agora, {
+      quantidade: 30,
+      antecedenciaMin: 120,
+      horizonteDias: 5,
+      diasFechados: ['2026-11-20'],
+    })
+    expect(slots.length).toBeGreaterThan(0)
+    for (const s of slots) expect(s.label, s.label).not.toContain('20/11')
+  })
+
+  it('sem a lista, o mesmo dia seria ofertado (controle)', () => {
+    const slots = gerarSlots(horarios, [], agora, { quantidade: 30, antecedenciaMin: 120, horizonteDias: 5 })
+    expect(slots.some((s) => s.label.includes('20/11'))).toBe(true)
+  })
+
+  it('dentroDaJanelaVisita recusa horário em dia fechado', () => {
+    const sexta9h = acreWallToUtc(2026, 10, 20, 9, 0).toISOString()
+    expect(dentroDaJanelaVisita(sexta9h, horarios)).toBe(true)
+    expect(dentroDaJanelaVisita(sexta9h, horarios, ['2026-11-20'])).toBe(false)
+  })
+})
