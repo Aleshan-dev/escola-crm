@@ -1,11 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerAdminClient } from '@/lib/supabase-server'
-import { getGoogleToken, pushTarefaParaGoogle } from '@/lib/google-calendar'
+import { atualizarTarefaNoGoogle, excluirEventoNoGoogle, getGoogleToken, pushTarefaParaGoogle } from '@/lib/google-calendar'
 
-// ADR-006: chamado pelo trigger `trg_push_google_tarefa` (Postgres) toda vez que uma
-// tarefa nova é inserida sem google_event_id — cria o evento no Google na hora, em vez
-// de esperar o cron varrer a tabela. Autenticado com um segredo próprio (GOOGLE_PUSH_SECRET),
-// separado do CRON_SECRET, pra limitar o raio de exposição caso um dos dois vaze.
+// ADR-006: chamado pelos triggers do Postgres em crm.tarefas — cria/atualiza/apaga o
+// evento no Google na hora, em vez de esperar o cron varrer a tabela. Autenticado com
+// um segredo próprio (GOOGLE_PUSH_SECRET), separado do CRON_SECRET.
+//   acao 'criar' (padrão)  → trg_push_google_tarefa (insert sem google_event_id)
+//   acao 'atualizar'       → trg_google_tarefa_alterada (data_hora/título/status mudou)
+//   acao 'excluir'         → trg_google_tarefa_excluida (linha apagada; manda o google_event_id)
 
 export async function POST(req: NextRequest) {
   const auth = req.headers.get('authorization')
@@ -13,24 +15,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
   }
 
-  const body = (await req.json().catch(() => null)) as { tarefa_id?: string } | null
+  const body = (await req.json().catch(() => null)) as
+    | { tarefa_id?: string; acao?: string; google_event_id?: string }
+    | null
+  const acao = body?.acao ?? 'criar'
+  const supabase = createServerAdminClient()
+
+  if (acao === 'excluir') {
+    if (!body?.google_event_id) return NextResponse.json({ error: 'google_event_id ausente' }, { status: 400 })
+    const ctx = await getGoogleToken(supabase)
+    if (!ctx) return NextResponse.json({ error: 'Google não conectado' }, { status: 400 })
+    const ok = await excluirEventoNoGoogle(supabase, ctx.token, ctx.calendarId, body.google_event_id)
+    return NextResponse.json({ ok })
+  }
+
   const tarefaId = body?.tarefa_id
   if (!tarefaId) return NextResponse.json({ error: 'tarefa_id ausente' }, { status: 400 })
 
-  const supabase = createServerAdminClient()
-
   const { data: tarefa } = await supabase
     .from('tarefas')
-    .select('id, titulo, data_hora, google_event_id')
+    .select('id, titulo, data_hora, status, google_event_id')
     .eq('id', tarefaId)
     .maybeSingle()
 
   if (!tarefa) return NextResponse.json({ error: 'tarefa não encontrada' }, { status: 404 })
-  if (tarefa.google_event_id) return NextResponse.json({ ok: true, skip: 'já sincronizada' })
+  if (acao === 'criar' && tarefa.google_event_id) return NextResponse.json({ ok: true, skip: 'já sincronizada' })
 
   const ctx = await getGoogleToken(supabase)
   if (!ctx) return NextResponse.json({ error: 'Google não conectado' }, { status: 400 })
 
-  const ok = await pushTarefaParaGoogle(supabase, ctx.token, ctx.calendarId, tarefa)
+  const ok =
+    acao === 'atualizar'
+      ? await atualizarTarefaNoGoogle(supabase, ctx.token, ctx.calendarId, tarefa)
+      : await pushTarefaParaGoogle(supabase, ctx.token, ctx.calendarId, tarefa)
   return NextResponse.json({ ok })
 }

@@ -14,6 +14,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  // Telas do CRM desligadas (19/11/2026): só sobram as de conectar Google/WhatsApp
+  // oficial. O middleware manda ?next=<tela> para voltar a ela depois do login.
+  const destino = (() => {
+    if (typeof window === 'undefined') return '/kanban'
+    const n = new URLSearchParams(window.location.search).get('next') ?? ''
+    return /^\/(?!\/)[\w\-/]*$/.test(n) ? n : '/kanban'
+  })()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -28,7 +35,7 @@ export default function LoginPage() {
         setLoading(false)
         return
       }
-      router.push('/kanban')
+      router.push(destino)
       router.refresh()
     } else {
       const { error } = await supabase.auth.signUp({ email, password })
@@ -48,7 +55,7 @@ export default function LoginPage() {
     setMsg(null)
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${window.location.origin}/auth/callback?next=/kanban` },
+      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destino)}` },
     })
     if (error) {
       setError(error.message)

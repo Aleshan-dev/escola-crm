@@ -136,6 +136,68 @@ export async function pushTarefaParaGoogle(
   return true
 }
 
+/**
+ * Reflete no Google uma tarefa que MUDOU (reagendada, renomeada, cancelada ou reativada).
+ * Pedido da Direção 19/11/2026: reagendar pela Sara ou à mão no ARCA não chegava ao Google.
+ * Cancelada → apaga o evento; senão → atualiza (status confirmed reativa um evento apagado).
+ * Sem evento ou evento sumido no Google → cria de novo.
+ */
+export async function atualizarTarefaNoGoogle(
+  supabase: Supabase,
+  token: string,
+  calendarId: string,
+  tarefa: { id: string; titulo: string; data_hora: string; status: string | null; google_event_id: string | null }
+): Promise<boolean> {
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`
+  if (tarefa.status === 'cancelada') {
+    if (!tarefa.google_event_id) return true
+    return excluirEventoNoGoogle(supabase, token, calendarId, tarefa.google_event_id)
+  }
+  if (!tarefa.google_event_id) return pushTarefaParaGoogle(supabase, token, calendarId, tarefa)
+
+  const inicio = new Date(tarefa.data_hora)
+  const fim = new Date(inicio.getTime() + 60 * 60 * 1000)
+  const r = await fetch(`${base}/${encodeURIComponent(tarefa.google_event_id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      summary: tarefa.titulo,
+      status: 'confirmed',
+      start: { dateTime: inicio.toISOString(), timeZone: TZ },
+      end: { dateTime: fim.toISOString(), timeZone: TZ },
+    }),
+  })
+  if (r.ok) return true
+  if (r.status === 404 || r.status === 410) {
+    // Evento não existe mais no Google: cria um novo e guarda o id.
+    await supabase.from('tarefas').update({ google_event_id: null }).eq('id', tarefa.id)
+    return pushTarefaParaGoogle(supabase, token, calendarId, tarefa)
+  }
+  await registrarAlerta(
+    supabase,
+    'google/atualizar-tarefa',
+    `Falha ao atualizar no Google "${tarefa.titulo}" (${tarefa.data_hora}): HTTP ${r.status}. ` +
+      `A mudança ESTÁ salva na agenda, mas o Google Agenda pode estar com o horário antigo.`
+  )
+  return false
+}
+
+/** Apaga o evento no Google (tarefa excluída ou cancelada). Já apagado conta como sucesso. */
+export async function excluirEventoNoGoogle(
+  supabase: Supabase,
+  token: string,
+  calendarId: string,
+  googleEventId: string
+): Promise<boolean> {
+  const r = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(googleEventId)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+  )
+  if (r.ok || r.status === 404 || r.status === 410) return true
+  await registrarAlerta(supabase, 'google/excluir-evento', `Falha ao apagar evento ${googleEventId} no Google: HTTP ${r.status}.`)
+  return false
+}
+
 type GoogleEvent = {
   id: string
   status?: string

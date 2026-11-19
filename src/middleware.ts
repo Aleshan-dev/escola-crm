@@ -1,11 +1,16 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { ORIGENS_ARCA, bearerDe, clienteComToken, rotaAceitaArca } from '@/lib/auth-arca'
+import { destinoNoArca } from '@/lib/telas-desligadas'
 
 /** Papéis do ARCA (profiles.papel) que operam o CRM. Igual a crm.pode_operar() no banco. */
 const PAPEIS_EQUIPE = new Set(['direcao', 'secretaria', 'comercial'])
 
 export async function middleware(request: NextRequest) {
+  // Telas antigas desligadas (19/11/2026): vão para a equivalente no ARCA.
+  const destinoArca = destinoNoArca(request.nextUrl.pathname)
+  if (destinoArca) return NextResponse.redirect(destinoArca, 308)
+
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -84,7 +89,9 @@ export async function middleware(request: NextRequest) {
 
   // Não logado → manda pra login
   if (!user && !isAuthRoute && !isPublic) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    const login = new URL('/login', request.url)
+    if (url.pathname !== '/') login.searchParams.set('next', url.pathname)
+    return NextResponse.redirect(login)
   }
 
   // EQUIPE SÓ (18/11/2026). O CRM divide o `auth.users` com o ARCA, que agora
@@ -107,7 +114,9 @@ export async function middleware(request: NextRequest) {
 
   // Logado e tentando acessar login → manda pro kanban
   if (user && isAuthRoute) {
-    return NextResponse.redirect(new URL('/inicio', request.url))
+    const next = url.searchParams.get('next') ?? ''
+    const volta = /^\/configuracoes\/(integracoes|whatsapp-oficial)$/.test(next) ? next : '/configuracoes/integracoes'
+    return NextResponse.redirect(new URL(volta, request.url))
   }
 
   return supabaseResponse
