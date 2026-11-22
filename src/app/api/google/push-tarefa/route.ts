@@ -10,16 +10,23 @@ import { atualizarTarefaNoGoogle, excluirEventoNoGoogle, getGoogleToken, pushTar
 //   acao 'excluir'         → trg_google_tarefa_excluida (linha apagada; manda o google_event_id)
 
 export async function POST(req: NextRequest) {
-  const auth = req.headers.get('authorization')
-  if (!process.env.GOOGLE_PUSH_SECRET || auth !== `Bearer ${process.env.GOOGLE_PUSH_SECRET}`) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+  const auth = req.headers.get('authorization') ?? ''
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+  const supabase = createServerAdminClient()
+  // Fonte única do segredo = Vault do banco (22/11/2026): a variável da Vercel tinha ficado
+  // com um valor antigo e TODO aviso do banco voltava 401. A env segue aceita por compat.
+  const okEnv = !!process.env.GOOGLE_PUSH_SECRET && token === process.env.GOOGLE_PUSH_SECRET
+  let autorizado = okEnv
+  if (!autorizado && token) {
+    const { data } = await supabase.rpc('google_push_confere', { p_token: token })
+    autorizado = data === true
   }
+  if (!autorizado) return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
 
   const body = (await req.json().catch(() => null)) as
     | { tarefa_id?: string; acao?: string; google_event_id?: string }
     | null
   const acao = body?.acao ?? 'criar'
-  const supabase = createServerAdminClient()
 
   if (acao === 'excluir') {
     if (!body?.google_event_id) return NextResponse.json({ error: 'google_event_id ausente' }, { status: 400 })
