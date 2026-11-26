@@ -311,10 +311,12 @@ async function registrarWidEnviado(wid: string | null, telefone: string): Promis
 }
 
 // Envio de texto. Devolve `{ key: { id } }` (forma do Evolution).
-export async function wahaSendText(numero: string, texto: string): Promise<{ key: { id: string | null } }> {
+// `sessao`: envia por OUTRO chip (ex.: Sara respondendo no Salomao-crm, final 0916,
+// pelo mesmo número em que o lead escreveu). Omitido = sessão configurada.
+export async function wahaSendText(numero: string, texto: string, sessao?: string | null): Promise<{ key: { id: string | null } }> {
   const cfg = await getWahaConfig()
   const j = await post(cfg, '/api/sendText', {
-    session: cfg.session,
+    session: sessao || cfg.session,
     chatId: await resolverChatId(numero),
     text: texto,
   })

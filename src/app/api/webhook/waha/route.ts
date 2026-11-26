@@ -10,6 +10,7 @@ import {
 import { extrairConteudoMidiaWaha } from '@/lib/midia'
 import { normalizarCelular } from '@/lib/telefone'
 import { nomePessoaValido } from '@/lib/dados-lead'
+import { identificarResponsavel } from '@/lib/sgei'
 import { conexaoConfere, registrarWebhook, resultadoDaIngestao, segredoConfere } from '@/lib/canais/webhook'
 import { lerConfigAnuncio, extrairReferralWaha, detectarOrigem } from '@/lib/atribuicao'
 
@@ -44,6 +45,26 @@ export async function GET() {
 const enviarWaha: EnviarTexto = async (telefone, texto) => {
   const sent = await wahaSendText(telefone, texto)
   return sent?.key?.id || null
+}
+
+// Sara pode responder por outro chip só para quem NÃO é responsável no SGEI.
+// Família já checada usa o carimbo (ja_responsavel); senão pergunta ao SGEI agora.
+// Falha/indisponível => false (na dúvida a equipe responde à mão).
+async function saraPodeResponderNoChip(
+  supabase: ReturnType<typeof createServerAdminClient>,
+  telefone: string,
+): Promise<boolean> {
+  const { data: fam } = await supabase
+    .from('familias')
+    .select('ja_responsavel, sgei_checado_em')
+    .eq('telefone_norm', normalizarCelular(telefone))
+    .order('criado_em', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (fam?.ja_responsavel === true) return false
+  if (fam?.sgei_checado_em) return true
+  const ident = await identificarResponsavel(telefone)
+  return ident !== null && ident.ja_responsavel === false
 }
 
 // id da mensagem no webhook do WAHA: string, ou objeto com _serialized.
@@ -181,6 +202,16 @@ export async function POST(req: NextRequest) {
           origemLead = detectarOrigem({ texto: texto || conteudo, referral: extrairReferralWaha(p), cfg: cfgAnuncio })
         }
 
+        // Outro chip (ex.: Salomao-crm, final 0916): a Sara PODE responder por ele
+        // quando o contato NÃO é responsável no SGEI (decisão da Direção 26/11) — e
+        // responde pelo MESMO chip em que o lead escreveu. Responsável/matriculado,
+        // ou SGEI indisponível (na dúvida), continua só registrando + alerta.
+        const saraNoChip = outraSessao && (await saraPodeResponderNoChip(supabase, telefone))
+        const soRegistra = outraSessao && !saraNoChip
+        const enviarResposta: EnviarTexto = saraNoChip
+          ? async (tel, txt) => (await wahaSendText(tel, txt, sessao))?.key?.id || null
+          : enviarWaha
+
         const status = await processarMensagemRecebida(supabase, {
           telefone,
           conteudo,
@@ -188,10 +219,10 @@ export async function POST(req: NextRequest) {
           wid,
           origem: 'whatsapp',
           tag: 'whatsapp',
-          enviarTexto: enviarWaha,
+          enviarTexto: enviarResposta,
           canalEnvio: 'waha',
           canalRef,
-          somenteRegistrar: outraSessao ? { motivo: `o chip WAHA "${sessao}"` } : undefined,
+          somenteRegistrar: soRegistra ? { motivo: `o chip WAHA "${sessao}"` } : undefined,
           canal: origemLead.canal,
           campanha: origemLead.campanha,
           referral: origemLead.referral,
