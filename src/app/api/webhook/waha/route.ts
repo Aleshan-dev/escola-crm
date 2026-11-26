@@ -119,7 +119,12 @@ export async function POST(req: NextRequest) {
     // Resolve o contato: telefone real + nome do WhatsApp. O `from` pode vir como
     // @lid (sem telefone e sem nome no payload) — o resolver pergunta ao WAHA.
     // Conserta casamento de família, destino da resposta E o nome do lead.
-    const { telefone, nome } = await resolverContatoWaha(from)
+    // O engine GOWS manda o número real junto do @lid (_data.Info.SenderAlt; numa
+    // mensagem nossa, RecipientAlt) — usa ele antes de perguntar ao WAHA, e pergunta
+    // à sessão em que a mensagem chegou (o mapa lid→número é por sessão).
+    const info = p?._data?.Info || {}
+    const alt: string | null = (p?.fromMe === true ? info?.RecipientAlt : info?.SenderAlt) || null
+    const { telefone, nome } = await resolverContatoWaha(from, { alt, sessao })
 
     // Sem número real (um @lid que o WAHA não conseguiu mapear): NÃO cria família
     // nem grava mensagem. Usar o LID como "telefone" misturava conversas de pessoas
@@ -131,7 +136,7 @@ export async function POST(req: NextRequest) {
     }
 
     const texto: string = p?.body || ''
-    const pushName: string = nome || p?.notifyName || p?._data?.notifyName || 'Família'
+    const pushName: string = nome || p?.notifyName || p?._data?.notifyName || info?.PushName || 'Família'
     const wid = widDe(p?.id)
 
     // fromMe: mensagem saída do próprio número (Sara via API ou resposta manual no celular).

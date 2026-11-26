@@ -170,14 +170,31 @@ export async function resolverChatId(numero: string): Promise<string> {
 const _lidCache = new Map<string, string>()
 const soDigitos = (v: string) => (v || '').split('@')[0].replace(/\D/g, '')
 
-export async function resolverTelefoneWaha(from: string): Promise<{ telefone: string; via: string }> {
+// `opts.alt`: o número real que o próprio evento já traz junto do @lid (engine GOWS:
+// _data.Info.SenderAlt = "5568...@s.whatsapp.net"). É a fonte mais confiável — vence
+// qualquer consulta. `opts.sessao`: a sessão WAHA em que a mensagem CHEGOU. O mapa
+// lid→número é por sessão; perguntar à sessão configurada sobre um @lid que chegou
+// noutro chip (ex.: Salomao-crm, final 0916) não resolvia (caso Elen 26/11).
+export async function resolverTelefoneWaha(
+  from: string,
+  opts: { alt?: string | null; sessao?: string | null } = {},
+): Promise<{ telefone: string; via: string }> {
   const raw = from || ''
   if (raw.includes('@c.us')) return { telefone: soDigitos(raw), via: 'c.us' }
   if (!raw.includes('@lid')) return { telefone: soDigitos(raw), via: 'raw' }
   if (_lidCache.has(raw)) return { telefone: _lidCache.get(raw)!, via: 'cache' }
 
+  const alt = typeof opts.alt === 'string' ? opts.alt : ''
+  if (alt && !alt.includes('@lid')) {
+    const d = soDigitos(alt)
+    if (d.length >= 10) {
+      _lidCache.set(raw, d)
+      return { telefone: d, via: 'sender-alt' }
+    }
+  }
+
   const cfg = await getWahaConfig()
-  const s = encodeURIComponent(cfg.session)
+  const s = encodeURIComponent(opts.sessao || cfg.session)
   const headers = { 'X-Api-Key': cfg.key }
   const lidEnc = encodeURIComponent(raw)
 
@@ -220,12 +237,15 @@ export async function resolverTelefoneWaha(from: string): Promise<{ telefone: st
 // Resolve o CONTATO (telefone real + nome do WhatsApp) por trás de um `from` que
 // pode ser @lid. O nome vem da API de contatos do WAHA (o painel mostra os nomes,
 // então a API tem — só varia o campo por engine). Defensivo: tenta vários campos.
-export async function resolverContatoWaha(from: string): Promise<{ telefone: string; nome: string | null; via: string }> {
-  const { telefone, via } = await resolverTelefoneWaha(from)
+export async function resolverContatoWaha(
+  from: string,
+  opts: { alt?: string | null; sessao?: string | null } = {},
+): Promise<{ telefone: string; nome: string | null; via: string }> {
+  const { telefone, via } = await resolverTelefoneWaha(from, opts)
   let nome: string | null = null
   try {
     const cfg = await getWahaConfig()
-    const s = encodeURIComponent(cfg.session)
+    const s = encodeURIComponent(opts.sessao || cfg.session)
     const headers = { 'X-Api-Key': cfg.key }
     const ids = Array.from(new Set([from, `${telefone}@c.us`]))
     const urls: string[] = []
