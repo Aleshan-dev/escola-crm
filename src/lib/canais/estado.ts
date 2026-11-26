@@ -24,6 +24,26 @@ export async function lerEstadoCanais(phoneId?: string | null): Promise<EstadoCa
 }
 
 /**
+ * `familias.canal_ref` — sessão WAHA (chip) em que a família escreveu por último,
+ * carimbada pelo webhook WAHA. NULL = sessão configurada. Erro de banco LANÇA,
+ * pela mesma razão do canal: na dúvida, não manda por outro número.
+ */
+export async function lerSessaoDaFamilia(alvo: { familiaId?: string | null; telefone?: string | null }): Promise<string | null> {
+  const supabase = createServerAdminClient()
+  const q = alvo.familiaId
+    ? supabase.from('familias').select('canal_ref').eq('id', alvo.familiaId)
+    : alvo.telefone
+      ? supabase.from('familias').select('canal_ref')
+          .eq('telefone_norm', normalizarCelular(alvo.telefone))
+          .order('criado_em', { ascending: true }).limit(1)
+      : null
+  if (!q) return null
+  const { data, error } = await q.maybeSingle<{ canal_ref: string | null }>()
+  if (error) throw new Error(`sessão da família: ${error.message}`)
+  return data?.canal_ref ?? null
+}
+
+/**
  * `familias.canal_whatsapp` do contato — pela família (id) quando o chamador
  * sabe, senão pela IDENTIDADE do número (telefone_norm), nunca pelo telefone cru:
  * o mesmo contato chega como +55…, 55… ou sem o 9º dígito.

@@ -212,6 +212,19 @@ export async function POST(req: NextRequest) {
           ? async (tel, txt) => (await wahaSendText(tel, txt, sessao))?.key?.id || null
           : enviarWaha
 
+        // Chip da conversa (familias.canal_ref): follow-up, envio manual e mídia saem
+        // pela mesma sessão em que a família escreveu (src/lib/canais/enviar.ts).
+        // Só quando a conversa MUDA para este chip — o "só registra" de outro chip
+        // não mexe no canal (a equipe responde à mão por ele). NULL = configurada.
+        // Antes E depois do processamento: a família pode nascer dentro dele.
+        const carimbarChip = async () => {
+          if (soRegistra) return
+          await supabase.from('familias')
+            .update({ canal_ref: outraSessao ? sessao : null })
+            .eq('telefone_norm', normalizarCelular(telefone))
+        }
+        await carimbarChip()
+
         const status = await processarMensagemRecebida(supabase, {
           telefone,
           conteudo,
@@ -235,6 +248,7 @@ export async function POST(req: NextRequest) {
         // O canal do contato (familias.canal_whatsapp = 'waha') é carimbado dentro de
         // processarMensagemRecebida, pela família — não pelo telefone cru (outra
         // sessão não carimba: a conversa continua no canal em que já estava).
+        await carimbarChip()
         await registrarWebhook(supabase, { ...trilha, ...resultadoDaIngestao(status) })
 
         // Corrige o nome de leads que ficaram como "Família" (criados antes de

@@ -14,7 +14,7 @@ import { EnvioBarradoError, enviarProtegido, type ContextoEnvio, type ResultadoE
 import type { OrigemEnvio } from '@/lib/envio/defaults'
 import type { MidiaSaida } from '@/lib/whatsapp-cloud'
 import { adapterDe, type AdapterCanal } from './adapters'
-import { lerCanalDaFamilia, lerEstadoCanais } from './estado'
+import { lerCanalDaFamilia, lerEstadoCanais, lerSessaoDaFamilia } from './estado'
 import { idempotenciaPadrao, type IdempotenciaDeps } from './idempotencia'
 import { escolherCanal, refDoCanal } from './politica'
 import { CanalDivergenteError, CanalIndisponivelError, type Canal, type EstadoCanais, type Operacao } from './tipos'
@@ -47,6 +47,8 @@ export interface ResultadoCanal {
 export interface EnviarDeps {
   estado(phoneId?: string | null): Promise<EstadoCanais>
   canalFamilia(alvo: { familiaId?: string | null; telefone?: string | null }): Promise<string | null>
+  /** Sessão WAHA (chip) da conversa — familias.canal_ref. Omitido = sessão configurada. */
+  sessaoFamilia?(alvo: { familiaId?: string | null; telefone?: string | null }): Promise<string | null>
   adapter(canal: Canal): AdapterCanal
   idem: IdempotenciaDeps
   portao(ctx: ContextoEnvio, texto: string, enviar: () => Promise<string | null>): Promise<ResultadoEnvio>
@@ -55,6 +57,7 @@ export interface EnviarDeps {
 const depsPadrao: EnviarDeps = {
   estado: lerEstadoCanais,
   canalFamilia: lerCanalDaFamilia,
+  sessaoFamilia: lerSessaoDaFamilia,
   adapter: adapterDe,
   idem: idempotenciaPadrao,
   portao: (ctx, texto, enviar) => enviarProtegido(ctx, texto, enviar),
@@ -63,12 +66,18 @@ const depsPadrao: EnviarDeps = {
 /** Resolve o canal que um envio desta operação usaria agora, sem enviar. */
 export async function resolverCanal(
   p: Pick<PedidoEnvio, 'operacao' | 'telefone' | 'familiaId' | 'phoneId'>,
-  deps: Pick<EnviarDeps, 'estado' | 'canalFamilia'> = depsPadrao,
+  deps: Pick<EnviarDeps, 'estado' | 'canalFamilia' | 'sessaoFamilia'> = depsPadrao,
 ): Promise<{ canal: Canal; canalRef: string | null; disponivel: boolean; motivo?: string; estado: EstadoCanais }> {
-  const [estado, canalFamilia] = await Promise.all([
+  const conversa = p.operacao !== 'campanha' && p.operacao !== 'aviso_interno'
+  const alvo = { familiaId: p.familiaId, telefone: p.telefone }
+  const [estadoBase, canalFamilia, sessaoFamilia] = await Promise.all([
     deps.estado(p.phoneId),
-    p.operacao === 'campanha' ? Promise.resolve(null) : deps.canalFamilia({ familiaId: p.familiaId, telefone: p.telefone }),
+    p.operacao === 'campanha' ? Promise.resolve(null) : deps.canalFamilia(alvo),
+    conversa && deps.sessaoFamilia ? deps.sessaoFamilia(alvo) : Promise.resolve(null),
   ])
+  // Conversa com a família continua pelo CHIP em que ela escreveu (ex.: 0916 /
+  // Salomao-crm): a sessão da família substitui a configurada só neste envio.
+  const estado: EstadoCanais = sessaoFamilia ? { ...estadoBase, wahaSessao: sessaoFamilia } : estadoBase
   const e = escolherCanal(p.operacao, canalFamilia, estado)
   return { canal: e.canal, canalRef: refDoCanal(e.canal, estado), disponivel: e.ok, motivo: e.ok ? undefined : e.motivo, estado }
 }

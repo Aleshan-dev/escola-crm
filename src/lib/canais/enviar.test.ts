@@ -43,6 +43,40 @@ function montar(over: {
   return { deps, enviados, conclusoes }
 }
 
+describe('enviarPeloCanal — chip da conversa (familias.canal_ref)', () => {
+  function comSessao(sessao: string | null) {
+    const usadas: (string | null)[] = []
+    const { deps } = montar()
+    deps.sessaoFamilia = async () => sessao
+    deps.adapter = (canal) => ({
+      canal,
+      async enviarTexto(_to, _t, estado) { usadas.push(estado.wahaSessao); return 'w' },
+      async enviarMidia() { return null },
+    })
+    return { deps, usadas }
+  }
+
+  it('follow-up sai pela sessão em que a família escreveu (ex.: Salomao-crm)', async () => {
+    const { deps, usadas } = comSessao('Salomao-crm')
+    const r = await enviarPeloCanal({ operacao: 'followup', telefone: 'x', texto: 'oi' }, deps)
+    expect(usadas).toEqual(['Salomao-crm'])
+    expect(r.canalRef).toBe('Salomao-crm')
+  })
+
+  it('sem sessão na família: sessão configurada', async () => {
+    const { deps, usadas } = comSessao(null)
+    await enviarPeloCanal({ operacao: 'manual', telefone: 'x', texto: 'oi' }, deps)
+    expect(usadas).toEqual(['org_1'])
+  })
+
+  it('campanha e aviso interno ignoram a sessão da família', async () => {
+    const { deps, usadas } = comSessao('Salomao-crm')
+    await enviarPeloCanal({ operacao: 'campanha', telefone: 'x', texto: 'oi' }, deps)
+    await enviarPeloCanal({ operacao: 'aviso_interno', telefone: 'x', texto: 'oi' }, deps)
+    expect(usadas).toEqual(['org_1', 'org_1'])
+  })
+})
+
 describe('enviarPeloCanal', () => {
   it('sai pelo canal da conversa e devolve o carimbo', async () => {
     const { deps, enviados } = montar()

@@ -17,17 +17,18 @@ export interface AdapterCanal {
 
 const waha: AdapterCanal = {
   canal: 'waha',
-  async enviarTexto(to, texto) {
+  // estado.wahaSessao = sessão da conversa (familias.canal_ref) ou a configurada.
+  async enviarTexto(to, texto, estado) {
     const { wahaSendText } = await import('@/lib/waha')
-    return (await wahaSendText(to, texto))?.key?.id || null
+    return (await wahaSendText(to, texto, estado.wahaSessao))?.key?.id || null
   },
-  async enviarMidia(to, midia) {
+  async enviarMidia(to, midia, estado) {
     if (!midia.url) throw new Error('Envio de mídia por WAHA requer URL da mídia')
     const { wahaSendMedia } = await import('@/lib/waha')
     const sent = await wahaSendMedia(to, {
       media: midia.url, fileName: midia.filename, caption: midia.caption,
       mediatype: classificarMidia(midia.mimetype).kind, mimetype: midia.mimetype,
-    })
+    }, estado.wahaSessao)
     return sent?.key?.id || null
   },
 }

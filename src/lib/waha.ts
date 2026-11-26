@@ -329,13 +329,14 @@ export async function wahaSendText(numero: string, texto: string, sessao?: strin
 // recebe `media` como URL). Imagem → /api/sendImage; resto → /api/sendFile.
 export async function wahaSendMedia(
   numero: string,
-  opts: { media: string; fileName: string; caption?: string; mediatype?: string; mimetype?: string }
+  opts: { media: string; fileName: string; caption?: string; mediatype?: string; mimetype?: string },
+  sessao?: string | null,
 ): Promise<{ key: { id: string | null } }> {
   const cfg = await getWahaConfig()
   const ehImagem = opts.mediatype === 'image' || (opts.mimetype || '').startsWith('image/')
   const path = ehImagem ? '/api/sendImage' : '/api/sendFile'
   const j = await post(cfg, path, {
-    session: cfg.session,
+    session: sessao || cfg.session,
     chatId: await resolverChatId(numero),
     file: {
       url: opts.media,
