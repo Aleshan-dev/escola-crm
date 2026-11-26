@@ -27,6 +27,7 @@ import { notificarGestor } from '@/lib/notificacoes'
 import { dividirEmBaloes } from '@/lib/atendimento'
 import { ACRE_SHIFT_MS } from '@/lib/disponibilidade'
 import { enviarResumosPreVisita } from '@/lib/lembrete-visita'
+import { promptConviteLigacao } from '@/lib/ligacao-direcao'
 
 // Dá margem para o pacing (jitter entre envios) sem estourar o tempo da função.
 // 21/10/2026: com tudo saindo pelo WAHA (check-exists + envio ~4-5s por balão) e o
@@ -54,6 +55,8 @@ type LeadRow = {
   visita_confirmada_em: string | null
   reativar_em: string | null
   reativar_motivo: string | null
+  convite_ligacao_em: string | null
+  convite_ligacao_enviado_em: string | null
   familia: { telefone: string; nome_responsavel: string; whatsapp_phone_number_id: string | null; canal_whatsapp: string | null } | null
   coluna: {
     nome: string
@@ -252,7 +255,7 @@ export async function executarFollowup(agora: number = Date.now()) {
       `id, coluna_id, familia_id, ultima_interacao_em, entrou_coluna_em, data_proxima_acao,
        followup_count, ultimo_followup_em, followup_status,
        no_show_em, reagendamentos_count, visita_confirmada_em,
-       reativar_em, reativar_motivo,
+       reativar_em, reativar_motivo, convite_ligacao_em, convite_ligacao_enviado_em,
        familia:familias(telefone, nome_responsavel, whatsapp_phone_number_id, canal_whatsapp),
        coluna:colunas(nome, ordem, followup_intervalo_horas, followup_max)`
     )
@@ -320,18 +323,27 @@ export async function executarFollowup(agora: number = Date.now()) {
     const col = lead.coluna
     if (!tel || !col) continue
 
-    const intervaloBase = col.followup_intervalo_horas
-    if (intervaloBase == null) continue // etapa sem follow-up (ex.: Matriculados, Perdidos)
+    // CONVITE DE LIGAÇÃO DA DIREÇÃO (26/11/2026): a equipe marcou o lead
+    // (leads.convite_ligacao_em) e o convite ainda não saiu. É UM toque pedido pela
+    // equipe, então passa por cima da cadência da coluna (inclusive Perdidos) e dos
+    // tetos de chase frio — mas segue a janela 8h–20h e o portão anti-bloqueio.
+    // Depois de enviado, a Sara agenda a ligação quando a família responder
+    // (src/lib/ligacao-direcao.ts).
+    const conviteLigacao = !!lead.convite_ligacao_em && !lead.convite_ligacao_enviado_em
+
+    if (col.followup_intervalo_horas == null && !conviteLigacao) continue // etapa sem follow-up (ex.: Matriculados, Perdidos)
+    // Só o convite de ligação passa sem intervalo, e ele não usa a cadência da coluna.
+    const intervaloBase = col.followup_intervalo_horas ?? 0
 
     const trigger = triggerPorColuna(col.nome)
 
     // Fora do horário comercial (ver topo), só o lembrete de visita IMINENTE passa;
     // todo o resto espera a janela de 8h–20h.
-    if (foraDoHorario && trigger !== 'confirmacao_visita') continue
+    if (foraDoHorario && (conviteLigacao || trigger !== 'confirmacao_visita')) continue
 
     // O pós-visita se controla pelo PRÓPRIO cronograma (POS_VISITA_TOQUES_HORAS), não
     // pelo par followup_count/followup_max — por isso fica de fora deste guard genérico.
-    if (trigger !== 'followup_pos_visita' && lead.followup_count >= col.followup_max) {
+    if (!conviteLigacao && trigger !== 'followup_pos_visita' && lead.followup_count >= col.followup_max) {
       await supabase.from('leads').update({ followup_status: 'esgotado' }).eq('id', lead.id)
       resultados.push({ lead: lead.id, skip: 'esgotado' })
       continue
@@ -354,7 +366,10 @@ export async function executarFollowup(agora: number = Date.now()) {
     let triggerLog: string = trigger
     let promptFollowup = promptPorTrigger(trigger, lead.familia!.nome_responsavel, count + 1)
 
-    if (trigger === 'confirmacao_visita') {
+    if (conviteLigacao) {
+      triggerLog = 'convite_ligacao'
+      promptFollowup = promptConviteLigacao(lead.familia!.nome_responsavel)
+    } else if (trigger === 'confirmacao_visita') {
       // Baseia os lembretes na TAREFA de visita (cobre visitas manuais/reagendadas).
       const { data: visita } = await supabase
         .from('tarefas')
@@ -739,6 +754,13 @@ export async function executarFollowup(agora: number = Date.now()) {
           ? toquesPosVisita + 1 >= POS_VISITA_MAX_TOQUES
           : novoCount >= col.followup_max
       if (esgotou) update.followup_status = 'esgotado'
+      // Convite de ligação: saiu 1x. Marca para não repetir; o lead NÃO volta a ser
+      // perseguido por isso (o convite não conta no chase frio) e a Sara segue reativa.
+      if (triggerLog === 'convite_ligacao' || triggerLog === 'convite_ligacao_alerta') {
+        update.convite_ligacao_enviado_em = new Date().toISOString()
+        update.followup_count = count
+        update.followup_status = lead.followup_status
+      }
       // Reengajamento agendado: o toque combinado saiu. Limpa a data para não repetir e
       // deixa o lead retomar a cadência normal de recuperação (backoff) a partir daqui.
       if (triggerLog === 'reengajamento_agendado' || triggerLog === 'reengajamento_agendado_alerta') {

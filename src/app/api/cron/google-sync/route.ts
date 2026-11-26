@@ -23,8 +23,8 @@ export async function GET(req: NextRequest) {
 
     // Sistema -> Google: qualquer tarefa órfã (o trigger deveria ter pego, isso é só o fallback)
     let push = 0
-    const { data: novas } = await supabase.from('tarefas').select('id, titulo, data_hora').is('google_event_id', null)
-    for (const t of (novas as unknown as { id: string; titulo: string; data_hora: string }[]) || []) {
+    const { data: novas } = await supabase.from('tarefas').select('id, titulo, data_hora, duracao_min').is('google_event_id', null)
+    for (const t of (novas as unknown as { id: string; titulo: string; data_hora: string; duracao_min: number | null }[]) || []) {
       const ok = await pushTarefaParaGoogle(supabase, ctx.token, ctx.calendarId, t)
       if (ok) push++
     }

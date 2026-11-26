@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
 
   const { data: tarefa } = await supabase
     .from('tarefas')
-    .select('id, titulo, data_hora, status, google_event_id')
+    .select('id, titulo, data_hora, status, google_event_id, duracao_min')
     .eq('id', tarefaId)
     .maybeSingle()
 

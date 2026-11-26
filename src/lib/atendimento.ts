@@ -23,6 +23,7 @@ import { INSTRUCAO_REFORCO, detectaPromessaHumana, modoGuarda } from '@/lib/caso
 import { validarAbertura } from '@/lib/casos/regras'
 import { normalizarCelular } from '@/lib/telefone'
 import { registrarAlerta } from '@/lib/alertas'
+import { agendarLigacaoDirecao } from '@/lib/ligacao-direcao'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
@@ -965,6 +966,23 @@ export async function processarMensagemRecebida(
         }
       }
 
+      // LIGAÇÃO DA DIREÇÃO (26/11/2026): a família cravou dia + hora para a ligação de
+      // 15 min. Grava/move a tarefa 'ligacao' (Google Agenda com 15 min) — ver
+      // src/lib/ligacao-direcao.ts. Falha aqui nunca derruba o atendimento.
+      if (saraResult.agendar_ligacao) {
+        try {
+          await agendarLigacaoDirecao(supabase, {
+            leadId: lead.id,
+            nome: familia.nome_responsavel ?? null,
+            dataAcre: saraResult.agendar_ligacao.data_acre,
+            horaAcre: saraResult.agendar_ligacao.hora_acre,
+          })
+        } catch (e) {
+          console.error('[ligacao-direcao] falha ao agendar', lead.id, e)
+          await registrarAlerta(supabase, 'sara/ligacao-direcao', `Falha ao gravar a ligação da Direção: ${e instanceof Error ? e.message : String(e)}`, { leadId: lead.id }).catch(() => {})
+        }
+      }
+
       // Dados da família e da criança extraídos pela Sara neste turno. Normaliza
       // os tipos antes de gravar (idade "2 anos" derrubava o insert inteiro) e,
       // se a ficha continuar com buraco, o extrator dedicado completa o que a
@@ -993,7 +1011,10 @@ export async function processarMensagemRecebida(
       // Verbos que significam "eu marquei/mudei o horário" (NÃO inclui "confirmado para",
       // que também é a confirmação de PRESENÇA de uma visita que já existe — evita falso
       // positivo). Exige também um horário no texto.
+      // Turno de LIGAÇÃO DA DIREÇÃO: "marquei a ligação para sexta às 10h" não é visita —
+      // sem isto a guarda criaria uma visita no slot citado ou alarmaria "dizer × fazer".
       const textoAfirmaAgendamento =
+        !saraResult.agendar_ligacao &&
         /\b(agend|reagend|remarc|marqu|deix\w*\s+(?:agendad|marcad)|ajust\w*\s+o?\s*hor[áa]rio)\w*/i.test(
           saraResult.resposta || ''
         ) && /\d{1,2}\s*[:h]\s*\d{0,2}/.test(saraResult.resposta || '')

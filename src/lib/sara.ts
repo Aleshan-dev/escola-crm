@@ -92,6 +92,11 @@ export type SaraResposta = {
   // lead fica DORMENTE (o follow-up não cutuca) até lá; na data, a Sara manda sozinha um
   // toque caloroso que cita o `motivo`. Persistido em atendimento.ts (valida data futura).
   reengajamento: { reativar_em: string | null; motivo: string | null } | null
+  // LIGAÇÃO DA DIREÇÃO (26/11/2026): a família disse dia + hora para receber a ligação
+  // de 15 min da Direção. Só vem preenchido quando o lead tem convite de ligação aberto
+  // (leads.convite_ligacao_em) ou ligação já marcada (reagendamento). Hora de parede de
+  // Acre; o servidor (atendimento.ts) valida dia útil/horário e cria a tarefa 'ligacao'.
+  agendar_ligacao?: { data_acre: string; hora_acre: string } | null
 }
 
 /** Turno extra no fim do histórico (retorno de Caso, reforço da guarda de promessa). */
@@ -520,6 +525,38 @@ Esta família JÁ TEM visita marcada: ${labelVisitaMarcada} (horário de Rio Bra
 - Se ela não puder agora e não quiser escolher nova data, acolha, diga que fica à disposição para remarcar quando for melhor e NÃO afirme que remarcou nada.`
     : ''
 
+  // LIGAÇÃO DA DIREÇÃO (26/11/2026): a equipe pediu que a Sara convide a família para
+  // uma ligação rápida (15 min) da Direção, ou a ligação já está marcada. A Sara pergunta
+  // o melhor dia/horário e, quando a família crava dia + hora, preenche agendar_ligacao.
+  const { data: ligacaoMarcada } = await supabase
+    .from('tarefas')
+    .select('data_hora')
+    .eq('lead_id', leadId)
+    .eq('tipo', 'ligacao')
+    .eq('concluida', false)
+    .neq('status', 'cancelada')
+    .gte('data_hora', new Date().toISOString())
+    .order('data_hora', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  const conviteLigacaoAberto = !!(lead as { convite_ligacao_em?: string | null }).convite_ligacao_em
+  const ligacaoAtiva = conviteLigacaoAberto || !!ligacaoMarcada
+  const blocoLigacao = ligacaoAtiva
+    ? `
+════════════════════════════════
+LIGAÇÃO DA DIREÇÃO (15 minutos)
+════════════════════════════════
+${ligacaoMarcada
+  ? `A ligação da Direção com esta família JÁ ESTÁ MARCADA: ${new Date(ligacaoMarcada.data_hora).toLocaleString('pt-BR', { timeZone: 'America/Rio_Branco', weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} (horário de Rio Branco/Acre). Se a família pedir para mudar, pergunte o novo dia e horário e preencha "agendar_ligacao" com eles — o sistema MOVE a ligação (não cria outra).`
+  : 'A Direção da escola quer fazer uma ligação rápida, de uns 15 minutos, para esta família. Você já perguntou (ou vai perguntar) qual o melhor dia e horário para ela receber a ligação.'}
+- Horário possível: segunda a sexta, entre 08:00 e 17:45 (Rio Branco/Acre), a partir de amanhã ou de hoje com pelo menos 1 hora de antecedência. Fora disso, explique com gentileza e peça outro horário.
+- Quando a família disser um DIA e uma HORA concretos (ex.: "amanhã às 10h", "sexta 14h30"), preencha "agendar_ligacao": { "data_acre": "AAAA-MM-DD", "hora_acre": "HH:MM" } convertendo "amanhã"/dia da semana para a data certa a partir da data de hoje informada acima. Só então confirme: "combinado, a Direção te liga [dia da semana], [DD/MM] às [HH:MM] 😊".
+- Se ela disser só o período ("de manhã", "à tarde", "qualquer hora"), pergunte o horário exato antes de preencher. Se pedir para a escola escolher, proponha UM dia útil e hora e só preencha quando ela aceitar.
+- NUNCA afirme que marcou sem preencher "agendar_ligacao" neste mesmo turno. NÃO preencha "agendar_visita" por causa da ligação: ligação não é visita.
+- Na ligação a Direção vai conversar sobre a vaga e tirar dúvidas. NÃO cite valores, descontos ou condições: diga apenas que a Direção quer conversar pessoalmente.
+- Se a família não quiser a ligação, acolha sem insistir e deixe "agendar_ligacao" como null.`
+    : ''
+
   const blocoAgenda = !descobertaFeita && !visitaMarcada
     ? `
 ════════════════════════════════
@@ -654,6 +691,7 @@ ${instrucaoMovimentacao}
 ${promptAdicional ? `\nINSTRUÇÃO ESPECIAL: ${promptAdicional}` : ''}
 ${blocoAgenda}
 ${blocoVisitaMarcada}
+${blocoLigacao}
 ${blocoRegras}
 ${blocoAnotacoes}
 ${memoriaAtiva ? blocoMemoria(memoria.notas, config?.memoria_orcamento_chars ?? ORCAMENTO_PADRAO) : ''}
@@ -739,7 +777,8 @@ FORMATO JSON OBRIGATÓRIO (sem markdown, sem texto fora do JSON)
   "analise": { "intencao": "texto", "emocao": "texto", "temperatura": "frio|morno|quente|pronto_visita", "interesse": 3, "urgencia": 3, "probabilidade": 3, "proxima_acao": "texto" },
   "arquivar": false,
   "motivo_arquivamento": "texto ou null",
-  "reengajamento": { "reativar_em": "AAAA-MM-DD ou null", "motivo": "texto curto ou null" } ou null${casosAtivo ? `,
+  "reengajamento": { "reativar_em": "AAAA-MM-DD ou null", "motivo": "texto curto ou null" } ou null${ligacaoAtiva ? `,
+  "agendar_ligacao": { "data_acre": "AAAA-MM-DD", "hora_acre": "HH:MM" } ou null` : ''}${casosAtivo ? `,
   "abrir_caso": { "titulo": "...", "resumo": "...", "motivo": "...", "tipo": "outro" } ou null,
   "atualizar_caso": { "informacao": "..." } ou null` : ''}${memoriaAtiva ? `,
   ${CAMPO_JSON_MEMORIA}` : ''}
@@ -855,6 +894,15 @@ A última mensagem da conversa acima foi NOSSA e a família ainda não respondeu
                 typeof parsed.reengajamento.reativar_em === 'string' ? parsed.reengajamento.reativar_em : null,
               motivo: typeof parsed.reengajamento.motivo === 'string' ? parsed.reengajamento.motivo : null,
             }
+          : null,
+      agendar_ligacao:
+        ligacaoAtiva &&
+        parsed.agendar_ligacao &&
+        typeof parsed.agendar_ligacao.data_acre === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(parsed.agendar_ligacao.data_acre) &&
+        typeof parsed.agendar_ligacao.hora_acre === 'string' &&
+        /^\d{1,2}:\d{2}$/.test(parsed.agendar_ligacao.hora_acre)
+          ? { data_acre: parsed.agendar_ligacao.data_acre, hora_acre: parsed.agendar_ligacao.hora_acre }
           : null,
     }
   } catch {

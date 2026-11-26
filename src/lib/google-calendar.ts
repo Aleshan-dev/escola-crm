@@ -100,15 +100,20 @@ export async function getGoogleToken(
   return { token: tok.access_token, calendarId }
 }
 
+/** Duração do evento: crm.tarefas.duracao_min (ex.: 15 na ligação da Direção, 26/11/2026); nulo = 1h. */
+export function duracaoMs(min: number | null | undefined): number {
+  return (typeof min === 'number' && min > 0 ? min : 60) * 60 * 1000
+}
+
 /** Cria o evento no Google para UMA tarefa que ainda não tem google_event_id. Chamado pelo trigger (push instantâneo) e pelo resync diário (rede de segurança). */
 export async function pushTarefaParaGoogle(
   supabase: Supabase,
   token: string,
   calendarId: string,
-  tarefa: { id: string; titulo: string; data_hora: string }
+  tarefa: { id: string; titulo: string; data_hora: string; duracao_min?: number | null }
 ): Promise<boolean> {
   const inicio = new Date(tarefa.data_hora)
-  const fim = new Date(inicio.getTime() + 60 * 60 * 1000)
+  const fim = new Date(inicio.getTime() + duracaoMs(tarefa.duracao_min))
   const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -146,7 +151,7 @@ export async function atualizarTarefaNoGoogle(
   supabase: Supabase,
   token: string,
   calendarId: string,
-  tarefa: { id: string; titulo: string; data_hora: string; status: string | null; google_event_id: string | null }
+  tarefa: { id: string; titulo: string; data_hora: string; status: string | null; google_event_id: string | null; duracao_min?: number | null }
 ): Promise<boolean> {
   const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`
   if (tarefa.status === 'cancelada') {
@@ -156,7 +161,7 @@ export async function atualizarTarefaNoGoogle(
   if (!tarefa.google_event_id) return pushTarefaParaGoogle(supabase, token, calendarId, tarefa)
 
   const inicio = new Date(tarefa.data_hora)
-  const fim = new Date(inicio.getTime() + 60 * 60 * 1000)
+  const fim = new Date(inicio.getTime() + duracaoMs(tarefa.duracao_min))
   const r = await fetch(`${base}/${encodeURIComponent(tarefa.google_event_id)}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
