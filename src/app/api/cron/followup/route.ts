@@ -37,6 +37,11 @@ import { promptConviteLigacao } from '@/lib/ligacao-direcao'
 export const maxDuration = 120
 const ORCAMENTO_MS = 80_000
 
+// Teto de toques SEM RESPOSTA do CHASE FRIO ao longo da jornada inteira (não zera na
+// troca de coluna; zera quando o lead responde — reset no inbound em atendimento.ts).
+// Evita o lead perseguido por várias etapas sem nunca responder (o caso "Ravi", ~11 toques).
+const TETO_JORNADA_SEM_RESPOSTA = 5
+
 // ADR-004: o cron decide QUANDO agir (regras determinísticas em followup-regras.ts);
 // a Sara decide O QUE dizer.
 
@@ -48,6 +53,7 @@ type LeadRow = {
   entrou_coluna_em: string | null
   data_proxima_acao: string | null
   followup_count: number
+  followup_sem_resposta: number
   ultimo_followup_em: string | null
   followup_status: string
   no_show_em: string | null
@@ -249,11 +255,39 @@ export async function executarFollowup(agora: number = Date.now()) {
     return { skipped: 'followup_desligado' }
   }
 
+  // LOCK DE EXECUÇÃO (07/11/2026): o cron dedicado (*/15) e o heartbeat (*/30) chamam este
+  // núcleo; em :00 e :30 os dois rodam JUNTOS. Sem trava, as duas execuções leem o mesmo
+  // lead "devido" e disparam o follow-up em dobro — e a out_ia da 1ª bumpa
+  // leads.ultima_interacao_em (trigger trg_ultima_interacao), mudando a chave de
+  // idempotência de envio (envio_idempotencia) da 2ª, que então fura a dedupe e reenvia
+  // (pares idênticos em segundos; e os turnos de 16–24 balões empilhados). Claim-lock
+  // atômico em config_ia.followup_execucao_em: só UMA execução casa o WHERE (nulo ou
+  // vencido) e segue; a concorrente atualiza 0 linhas e sai. TTL de 6 min > maxDuration
+  // (300s), então nunca corta uma execução viva; e os ticks da mesma origem distam ≥15 min,
+  // então não há starvation. Se o cron dedicado morrer, o heartbeat acha a trava vencida e
+  // assume (ADR-008 preservado).
+  // A coluna é mantida não-nula (backfill em 2000-01-01), então o filtro `.lt` sozinho
+  // cobre o caso inicial sem precisar de `.or(...is.null)` — cuja string, se malformada,
+  // poderia errar o update e, no fail-closed, matar o motor em silêncio.
+  const LOCK_TTL_MS = 6 * 60 * 1000
+  const limiteLock = new Date(agora - LOCK_TTL_MS).toISOString()
+  const { data: lock, error: lockErr } = await supabase
+    .from('config_ia')
+    .update({ followup_execucao_em: new Date().toISOString() })
+    .eq('id', 1)
+    .lt('followup_execucao_em', limiteLock)
+    .select('id')
+  // FAIL-OPEN: só PULA quando a trava está claramente viva (update ok e 0 linhas casadas).
+  // Se o update ERROU, segue mesmo assim — um defeito na trava nunca pode calar o follow-up.
+  if (!lockErr && Array.isArray(lock) && lock.length === 0) {
+    return { skipped: 'execucao_concorrente' }
+  }
+
   const { data: leadsRaw, error } = await supabase
     .from('leads')
     .select(
       `id, coluna_id, familia_id, ultima_interacao_em, entrou_coluna_em, data_proxima_acao,
-       followup_count, ultimo_followup_em, followup_status,
+       followup_count, followup_sem_resposta, ultimo_followup_em, followup_status,
        no_show_em, reagendamentos_count, visita_confirmada_em,
        reativar_em, reativar_motivo, convite_ligacao_em, convite_ligacao_enviado_em,
        familia:familias(telefone, nome_responsavel, whatsapp_phone_number_id, canal_whatsapp),
@@ -346,6 +380,21 @@ export async function executarFollowup(agora: number = Date.now()) {
     if (!conviteLigacao && trigger !== 'followup_pos_visita' && lead.followup_count >= col.followup_max) {
       await supabase.from('leads').update({ followup_status: 'esgotado' }).eq('id', lead.id)
       resultados.push({ lead: lead.id, skip: 'esgotado' })
+      continue
+    }
+
+    // TETO DE JORNADA (08/11/2026): followup_sem_resposta persiste pela jornada toda (não
+    // zera na troca de coluna; só quando o lead responde — reset no inbound em
+    // atendimento.ts). O par followup_count/followup_max é POR coluna e zera a cada etapa,
+    // então um lead frio perseguido por Em Atendimento → No Show → Repescagem acumulava
+    // ~11 toques sem nunca responder. No CHASE FRIO paramos ao atingir o teto; as sequências
+    // quentes (confirmação de visita, pós-visita, resgate de no-show, reengajamento
+    // combinado) seguem com seus próprios limites.
+    const triggerFrio =
+      trigger === 'primeiro_contato' || trigger === 'reengajamento' || trigger === 'recuperacao'
+    if (!conviteLigacao && triggerFrio && (lead.followup_sem_resposta ?? 0) >= TETO_JORNADA_SEM_RESPOSTA) {
+      await supabase.from('leads').update({ followup_status: 'esgotado' }).eq('id', lead.id)
+      resultados.push({ lead: lead.id, skip: 'teto_jornada' })
       continue
     }
 
@@ -745,6 +794,7 @@ export async function executarFollowup(agora: number = Date.now()) {
       const novoCount = count + 1
       const update: Record<string, unknown> = {
         followup_count: novoCount,
+        followup_sem_resposta: (lead.followup_sem_resposta ?? 0) + 1,
         ultimo_followup_em: new Date().toISOString(),
       }
       // Pós-visita esgota pelo cronograma (nº de toques nesta entrada); os demais, pelo
@@ -759,6 +809,7 @@ export async function executarFollowup(agora: number = Date.now()) {
       if (triggerLog === 'convite_ligacao' || triggerLog === 'convite_ligacao_alerta') {
         update.convite_ligacao_enviado_em = new Date().toISOString()
         update.followup_count = count
+        update.followup_sem_resposta = lead.followup_sem_resposta ?? 0
         update.followup_status = lead.followup_status
       }
       // Reengajamento agendado: o toque combinado saiu. Limpa a data para não repetir e

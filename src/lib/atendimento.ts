@@ -24,11 +24,23 @@ import { validarAbertura } from '@/lib/casos/regras'
 import { normalizarCelular } from '@/lib/telefone'
 import { registrarAlerta } from '@/lib/alertas'
 import { agendarLigacaoDirecao } from '@/lib/ligacao-direcao'
+import {
+  afirmaAgendamento,
+  casarSlotAfirmado as casarSlotGuarda,
+  conferirSlotComTexto,
+  ehOfertaDeHorarios,
+  textoCitaInstante,
+} from '@/lib/agendamento-guarda'
 
 // Lógica de atendimento compartilhada pelos webhooks (Evolution e WhatsApp Cloud).
 // Cada canal só faz o parsing do payload e passa uma função de envio.
 
 type SupaAdmin = ReturnType<typeof createServerAdminClient>
+
+// FIX agendamento (2026-11-11): quando a Sara AFIRMA a visita no texto mas não preenche
+// `agendar_visita`, o dia+hora afirmados são casados com UM slot ofertado neste turno.
+// A função mora em src/lib/agendamento-guarda.ts (casarSlotAfirmado), com as guardas do
+// caso Amanda (oferta de horários nunca é confirmação; slot_id conferido com o texto).
 
 // Chave de identidade do contato (espelho de crm.fn_normalizar_celular). Mora em
 // src/lib/telefone.ts; reexportado aqui para os importadores antigos.
@@ -476,7 +488,7 @@ export async function processarMensagemRecebida(
   // Lead respondeu: atualiza última interação e reengaja o follow-up (zera contador)
   await supabase
     .from('leads')
-    .update({ ultima_interacao_em: new Date().toISOString(), followup_count: 0, followup_status: 'ativo', precisa_template: false })
+    .update({ ultima_interacao_em: new Date().toISOString(), followup_count: 0, followup_sem_resposta: 0, followup_status: 'ativo', precisa_template: false })
     .eq('id', lead.id)
 
   if (somenteRegistrar) {
@@ -955,6 +967,7 @@ export async function processarMensagemRecebida(
               // antes de a família pedir prazo, sem isto o cron o re-esgotaria e o sweep
               // o jogaria em "Perdidos" ignorando a data de reativação. Dormente = limpo.
               followup_count: 0,
+              followup_sem_resposta: 0,
               followup_status: 'ativo',
             })
             .eq('id', lead.id)
@@ -1011,15 +1024,42 @@ export async function processarMensagemRecebida(
       // Verbos que significam "eu marquei/mudei o horário" (NÃO inclui "confirmado para",
       // que também é a confirmação de PRESENÇA de uma visita que já existe — evita falso
       // positivo). Exige também um horário no texto.
+      // CASO AMANDA (22/11/2026): o regex antigo casava "agenda" (substantivo) numa OFERTA
+      // de dois horários e o servidor gravava a visita antes da escolha. Regras em
+      // src/lib/agendamento-guarda.ts (testadas).
       // Turno de LIGAÇÃO DA DIREÇÃO: "marquei a ligação para sexta às 10h" não é visita —
       // sem isto a guarda criaria uma visita no slot citado ou alarmaria "dizer × fazer".
       const textoAfirmaAgendamento =
-        !saraResult.agendar_ligacao &&
-        /\b(agend|reagend|remarc|marqu|deix\w*\s+(?:agendad|marcad)|ajust\w*\s+o?\s*hor[áa]rio)\w*/i.test(
-          saraResult.resposta || ''
-        ) && /\d{1,2}\s*[:h]\s*\d{0,2}/.test(saraResult.resposta || '')
+        !saraResult.agendar_ligacao && afirmaAgendamento(saraResult.resposta || '')
+      const falaEhOferta = ehOfertaDeHorarios(saraResult.resposta || '')
 
-      const av = saraResult.agendar_visita
+      let av = saraResult.agendar_visita
+      // Fala que OFERECE horários ("24/11 às 09:30 ou 25/11 às 14:00 — qual prefere?")
+      // nunca é confirmação, mesmo que o modelo tenha preenchido a ação por engano.
+      if (falaEhOferta && av) {
+        console.warn('[atendimento] agendar_visita ignorado: a fala é oferta de horários', { lead: lead.id })
+        av = null
+      }
+      // O slot_id é recalculado a cada turno: o modelo pode repetir um id do turno anterior
+      // que agora aponta para OUTRO horário. Confere com o horário que ela DISSE.
+      if (av?.slot_id) {
+        const conferido = conferirSlotComTexto(av.slot_id, saraResult.resposta || '', saraResult.slots_ofertados)
+        if (conferido !== av.slot_id) {
+          console.warn('[atendimento] slot_id não bate com o horário dito', { lead: lead.id, slot: av.slot_id, conferido })
+          av = conferido ? { ...av, slot_id: conferido } : { ...av, slot_id: null }
+        }
+      }
+      // FIX A (2026-11-11): se a Sara AFIRMOU a visita no texto mas não preencheu a ação
+      // (o modelo leve falha nisso), casa o dia+hora citados com um slot ofertado neste
+      // turno e agenda sozinho — independente de o modelo emitir o JSON. Ver casarSlotAfirmado.
+      let agendouPorTexto = false
+      if (textoAfirmaAgendamento && !(av && (av.slot_id || av.hora_acre || av.data_hora))) {
+        const idCasado = casarSlotGuarda(saraResult.resposta, saraResult.slots_ofertados)
+        if (idCasado) {
+          av = { slot_id: idCasado, data_hora: null, data_acre: null, hora_acre: null }
+          agendouPorTexto = true
+        }
+      }
       // RAIZ DO FUSO (2026-10-29): o instante vem do SLOT ofertado (servidor), não da
       // hora que o modelo monta. Precedência de resolução:
       //   1) slot_id   → `slots_ofertados` (UTC autoritativo de calcularSlotsDisponiveis);
@@ -1155,6 +1195,20 @@ export async function processarMensagemRecebida(
       // (capturado ANTES do fallback abaixo, que marca temSlotVisita por visita ANTIGA).
       const visitaGravadaNoTurno = temSlotVisita
 
+      // FIX A: agendamos pelo texto e o modelo não decidiu a coluna → apontamos a
+      // movimentação para "Visita Agendada". A trava `temSlotVisita` no bloco de
+      // movimentação abaixo garante que só passa com horário real gravado neste turno.
+      // todasColunas já vem filtrada pelo funil do lead (sem ambiguidade de nome).
+      if (agendouPorTexto && temSlotVisita && !saraResult.proxima_coluna_id) {
+        const colVisita = todasColunas?.find((c) => c.nome === 'Visita Agendada')
+        if (colVisita) {
+          saraResult.proxima_coluna_id = colVisita.id
+          if (!saraResult.razao_movimentacao) {
+            saraResult.razao_movimentacao = 'Visita agendada (Sara confirmou o horário na conversa)'
+          }
+        }
+      }
+
       // Se a Sara não agendou um slot neste turno, o lead ainda pode ir para
       // "Visita Agendada" caso JÁ exista uma tarefa de visita futura (ex.: visita
       // marcada manualmente pelo gestor, ou num turno anterior).
@@ -1177,11 +1231,25 @@ export async function processarMensagemRecebida(
       // aconteceu com a Cris (03/11): "já agendei 15:30" sem nunca mexer na tarefa, e a
       // família ficou sem resposta real até o dia seguinte. Avisa o gestor para marcar
       // à mão. NÃO reescreve a fala (a família já recebeu) — só levanta a bandeira.
+      // Não alarma se a visita JÁ está na agenda exatamente no dia/hora que ela disse
+      // (ex.: só confirmou de novo o horário já gravado).
+      let jaEstaNaAgenda = false
       if (textoAfirmaAgendamento && !visitaGravadaNoTurno) {
+        const { data: futuras } = await supabase
+          .from('tarefas')
+          .select('data_hora')
+          .eq('lead_id', lead.id)
+          .eq('tipo', 'visita')
+          .eq('concluida', false)
+          .neq('status', 'cancelada')
+          .gte('data_hora', new Date().toISOString())
+        jaEstaNaAgenda = (futuras ?? []).some((f) => textoCitaInstante(saraResult.resposta || '', f.data_hora))
+      }
+      if (textoAfirmaAgendamento && !visitaGravadaNoTurno && !jaEstaNaAgenda) {
         await notificarGestor(
           supabase,
           'visita',
-          `⚠️ *Confira esta visita* — a Sara disse à família que agendou/reagendou um horário, mas NADA foi gravado na agenda.\nFamília: ${familia.nome_responsavel || 'Família'}\nProvável horário fora da grade ou mal-entendido. Confirme com a família e marque manualmente.`
+          `⚠️ *Confira esta visita* — a Sara disse à família que agendou um horário, mas NÃO entrou na agenda. Confirme com a família e marque à mão.\nFamília: ${familia.nome_responsavel || 'Família'}\nTelefone: ${telefone || '—'}\nO que a Sara disse: "${(saraResult.resposta || '').replace(/\s+/g, ' ').trim().slice(0, 240)}"`
         ).catch((e) => console.error('[atendimento] alerta dizer×fazer falhou:', e))
       }
 

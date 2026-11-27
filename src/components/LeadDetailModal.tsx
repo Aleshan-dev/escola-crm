@@ -232,6 +232,7 @@ export function LeadDetailModal({
           reativar_em: iso,
           reativar_motivo: reativarMotivo.trim() || null,
           followup_count: 0,
+          followup_sem_resposta: 0,
           followup_status: 'ativo',
         })
         .eq('id', lead.id)
