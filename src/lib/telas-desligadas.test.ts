@@ -3,14 +3,14 @@ import { ARCA, destinoNoArca } from './telas-desligadas'
 
 describe('telas antigas do CRM → ARCA', () => {
   it('redireciona cada tela para a equivalente', () => {
-    expect(destinoNoArca('/kanban')).toBe(`${ARCA}/funil`)
-    expect(destinoNoArca('/chat')).toBe(`${ARCA}/conversas`)
-    expect(destinoNoArca('/agendamentos')).toBe(`${ARCA}/agenda-visitas`)
-    expect(destinoNoArca('/responsaveis/abc')).toBe(`${ARCA}/funil`)
-    expect(destinoNoArca('/configuracoes/salomao/auditoria')).toBe(`${ARCA}/ia-avancado`)
-    expect(destinoNoArca('/configuracoes/salomao')).toBe(`${ARCA}/agentes-ia`)
-    expect(destinoNoArca('/configuracoes/waha')).toBe(`${ARCA}/motor-whatsapp`)
-    expect(destinoNoArca('/')).toBe(`${ARCA}/funil`)
+    expect(destinoNoArca('/kanban')).toBe(`${ARCA}/comercial/funil`)
+    expect(destinoNoArca('/chat')).toBe(`${ARCA}/comercial/conversas`)
+    expect(destinoNoArca('/agendamentos')).toBe(`${ARCA}/comercial/agenda-de-visitas`)
+    expect(destinoNoArca('/responsaveis/abc')).toBe(`${ARCA}/comercial/funil`)
+    expect(destinoNoArca('/configuracoes/salomao/auditoria')).toBe(`${ARCA}/comercial/ia-avancado`)
+    expect(destinoNoArca('/configuracoes/salomao')).toBe(`${ARCA}/comercial/agentes-ia`)
+    expect(destinoNoArca('/configuracoes/waha')).toBe(`${ARCA}/comercial/motor-whatsapp`)
+    expect(destinoNoArca('/')).toBe(`${ARCA}/comercial/funil`)
   })
 
   it('mantém o motor e as telas que precisam deste domínio', () => {
@@ -33,7 +33,7 @@ describe('telas antigas do CRM → ARCA', () => {
   })
 
   it('não confunde prefixo parecido', () => {
-    expect(destinoNoArca('/casosx')).toBe(`${ARCA}/funil`)
-    expect(destinoNoArca('/configuracoes/integracoes-x')).toBe(`${ARCA}/motor-whatsapp`)
+    expect(destinoNoArca('/casosx')).toBe(`${ARCA}/comercial/funil`)
+    expect(destinoNoArca('/configuracoes/integracoes-x')).toBe(`${ARCA}/comercial/motor-whatsapp`)
   })
 })
