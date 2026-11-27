@@ -10,6 +10,8 @@ import { createClient } from '@/lib/supabase-server'
 
 /** Origens do ARCA liberadas no CORS das rotas acima. */
 export const ORIGENS_ARCA = new Set([
+  // Domínio próprio no Cloudflare (27/11/2026). O vercel.app segue durante a transição.
+  'https://arca.pequenosguardioes.com',
   'https://sgei-escola-guardia.vercel.app',
   'http://localhost:8080',
 ])

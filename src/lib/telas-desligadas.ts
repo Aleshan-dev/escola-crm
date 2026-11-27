@@ -5,7 +5,7 @@
 // conectar o Google e o WhatsApp oficial (OAuth da Meta/Google só aceita este domínio),
 // privacidade/termos (exigidos pela Meta) e sem-acesso.
 
-export const ARCA = 'https://sgei-escola-guardia.vercel.app'
+export const ARCA = 'https://arca.pequenosguardioes.com'
 
 const TELAS_QUE_FICAM = [
   '/login',
